@@ -1,0 +1,36 @@
+{
+  "known_apps": [
+    {
+      "name": "Ollama",
+      "match": {
+        "filename_contains": ["ollama"]
+      },
+      "target": "{apps_root}/Professional/AI/Ollama",
+      "command_template": "\"{installer}\" /DIR=\"{target}\"",
+      "family": "inno_setup",
+      "mode": "auto"
+    }
+  ],
+  "installer_families": [
+    {
+      "family": "inno_setup",
+      "command_template": "\"{installer}\" /DIR=\"{target}\"",
+      "mode": "auto"
+    },
+    {
+      "family": "nsis",
+      "command_template": "\"{installer}\" /D={target}",
+      "mode": "try"
+    },
+    {
+      "family": "msi",
+      "command_template": "msiexec /i \"{installer}\"",
+      "mode": "suggest"
+    },
+    {
+      "family": "unknown",
+      "command_template": "\"{installer}\"",
+      "mode": "suggest"
+    }
+  ]
+}

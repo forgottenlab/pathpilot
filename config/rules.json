@@ -1,0 +1,40 @@
+{
+  "rules": [
+    {
+      "name": "Installers",
+      "extensions": [".exe", ".msi"],
+      "target": "{archive_root}/01-Software/_IncomingInstallers"
+    },
+    {
+      "name": "Archives",
+      "extensions": [".zip", ".7z", ".rar"],
+      "target": "{archive_root}/07-Archives/_IncomingArchives"
+    },
+    {
+      "name": "Images",
+      "extensions": [".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"],
+      "target": "{archive_root}/03-Media/Images"
+    },
+    {
+      "name": "Videos",
+      "extensions": [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv"],
+      "target": "{archive_root}/03-Media/Videos"
+    },
+    {
+      "name": "Documents",
+      "extensions": [".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".txt"],
+      "target": "{archive_root}/05-Documents/Mixed"
+    },
+    {
+      "name": "PythonCode",
+      "extensions": [".py", ".ipynb"],
+      "target": "{archive_root}/06-Code/Python"
+    },
+    {
+      "name": "JavaCode",
+      "extensions": [".java", ".jar"],
+      "target": "{archive_root}/06-Code/Java"
+    }
+  ],
+  "fallback_target": "{archive_root}/99-Others"
+}

@@ -1,0 +1,12 @@
+project:
+  name: PathPilot
+  defaultBranch: master
+ui:
+  language: zh
+remotes:
+- name: github
+  url: git@github.com:forgottenlab/pathpilot.git
+  enabled: true
+publish:
+  pushTags: true
+  requireGitignore: true
