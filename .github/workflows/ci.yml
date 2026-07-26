@@ -145,6 +145,7 @@ jobs:
           if ($uiExitCode -eq 0) { throw "CLI-only UI unexpectedly returned exit code 0." }
           if ($uiText -match "Traceback") { throw "CLI-only UI emitted a traceback." }
           if ($uiText -notmatch "pathpilot\[gui\]") { throw "CLI-only UI omitted the pathpilot[gui] install hint." }
+          $global:LASTEXITCODE = 0
       - uses: actions/upload-artifact@v4
         with:
           name: pathpilot-dist
