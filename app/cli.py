@@ -21,14 +21,24 @@ from app.core.console import (
     print_json_text,
 )
 from app.core.i18n import (
+    get_lang,
     set_lang,
     normalize_lang,
     text,
     cell_text,
     title_text,
 )
+from app.core.path_policy import (
+    PathPolicyError,
+    normalize_path,
+    resolve_configured_sources,
+    validate_install_target,
+    validate_root_directory,
+    validate_runtime_layout,
+    validate_source_directory,
+)
 from app.core.paths import CONFIG_DIR, ensure_user_config_files
-from app.core.settings import load_rules, load_settings
+from app.core.settings import build_runtime_paths, load_rules, load_settings
 from app.diagnostics import run_doctor_report, run_self_test
 from app.files.watcher import start_watching
 from app.guide import show_command_guide
@@ -38,6 +48,7 @@ from app.installers.queue import (
     update_install_suggestion_status,
 )
 from app.installers.runner import run_install_record
+from app.installers.strategy import rebuild_execution_fields
 
 
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
@@ -99,6 +110,11 @@ def save_settings_file(settings: dict) -> None:
 
 def format_gb(num_bytes: int) -> str:
     return f"{num_bytes / (1024 ** 3):.2f} GB"
+
+
+def fail_path_policy(exc: PathPolicyError) -> None:
+    error(exc.localized(get_lang()))
+    raise typer.Exit(code=1)
 
 
 @app.callback(invoke_without_command=True)
@@ -217,14 +233,20 @@ def watch(
     lang: str | None = typer.Option(None, "--lang", "-l", help="Language: zh / en / bi"),
 ) -> None:
     active_lang = apply_language(lang)
-    settings = load_settings()
-    rules = load_rules()
+    try:
+        settings = load_settings()
+        rules = load_rules()
+    except PathPolicyError as exc:
+        fail_path_policy(exc)
 
     banner("PathPilot Watcher", text("开始监听下载入口目录", "Start watching source directories", active_lang))
     path_list(title_text("监听目录", "Source Directories", active_lang), settings.get("watch_directories", []))
     info(text("按 Ctrl + C 可停止监听。", "Press Ctrl + C to stop watching.", active_lang))
 
-    start_watching(settings, rules)
+    try:
+        start_watching(settings, rules)
+    except PathPolicyError as exc:
+        fail_path_policy(exc)
 
 
 @app.command()
@@ -245,11 +267,26 @@ def config_show() -> None:
 def config_set_root(path: str) -> None:
     settings = load_settings_file()
     settings.setdefault("base_paths", {})
-    settings["base_paths"]["root_dir"] = path.replace("\\", "/")
+    settings["base_paths"]["root_dir"] = path
+    runtime_paths = build_runtime_paths(settings)
+    try:
+        sources = resolve_configured_sources(settings, runtime_paths)
+        validated = validate_root_directory(runtime_paths["root_dir"], sources)
+        for source in sources:
+            validate_source_directory(source, runtime_paths)
+    except PathPolicyError as exc:
+        fail_path_policy(exc)
+    settings["base_paths"]["root_dir"] = str(validated).replace("\\", "/")
     save_settings_file(settings)
 
-    ok(f"已设置 PathPilot 根目录: {settings['base_paths']['root_dir']}")
-    warn("重启 PathPilot watcher 或重新打开 GUI 后生效。")
+    ok(text(
+        f"已设置 PathPilot 根目录: {settings['base_paths']['root_dir']}",
+        f"PathPilot root set: {settings['base_paths']['root_dir']}",
+    ))
+    warn(text(
+        "重启 PathPilot watcher 或重新打开 GUI 后生效。",
+        "Restart the PathPilot watcher or reopen the GUI to apply the change.",
+    ))
 
 
 @config_app.command("reset-root")
@@ -281,16 +318,26 @@ def sources_add(path: str) -> None:
     settings = load_settings_file()
     watch_dirs = settings.setdefault("watch_directories", [])
 
-    final_path = path.replace("\\", "/")
-    if final_path in watch_dirs:
-        warn(f"监听目录已存在: {final_path}")
+    runtime_paths = build_runtime_paths(settings)
+    try:
+        validate_runtime_layout(settings, runtime_paths)
+        validated = validate_source_directory(path, runtime_paths)
+    except PathPolicyError as exc:
+        fail_path_policy(exc)
+    final_path = str(validated).replace("\\", "/")
+    existing = {
+        str(normalize_path(item.format(**runtime_paths)))
+        for item in watch_dirs
+    }
+    if str(validated) in existing:
+        warn(text(f"监听目录已存在: {final_path}", f"Source directory already exists: {final_path}"))
         return
 
     watch_dirs.append(final_path)
     save_settings_file(settings)
 
-    ok(f"已添加监听目录: {final_path}")
-    warn("重启 PathPilot watcher 后生效。")
+    ok(text(f"已添加监听目录: {final_path}", f"Source directory added: {final_path}"))
+    warn(text("重启 PathPilot watcher 后生效。", "Restart the PathPilot watcher to apply the change."))
 
 
 @sources_app.command("remove")
@@ -331,16 +378,15 @@ def render_installs_table(items: list[dict]) -> None:
         status = item.get("status", "")
 
         mode_text = mode
-        if mode == "auto":
-            mode_text = f"[green]{mode}[/green]"
-        elif mode == "try":
-            mode_text = f"[yellow]{mode}[/yellow]"
-        elif mode == "suggest":
+        if mode == "suggest":
             mode_text = f"[blue]{mode}[/blue]"
 
         status_style = {
             "pending": "yellow",
-            "executed": "green",
+            "launched": "green",
+            "launch_failed": "red",
+            "blocked": "red",
+            "legacy_unsafe": "red",
             "skipped": "dim",
         }.get(status, "white")
 
@@ -348,10 +394,10 @@ def render_installs_table(items: list[dict]) -> None:
             str(item.get("id", "")),
             normalize_display_name(str(item.get("name", ""))),
             str(item.get("source", "")),
-            str(item.get("family", "")),
+            str(item.get("installer_family", item.get("family", ""))),
             mode_text,
             f"[{status_style}]{status}[/{status_style}]",
-            str(item.get("target", "")),
+            str(item.get("target_dir", item.get("target", ""))),
         )
 
     console.print(table)
@@ -389,12 +435,13 @@ def installs_detail(id: int) -> None:
         [
             ("名称", normalize_display_name(record.get("name", ""))),
             ("来源", record.get("source", "")),
-            ("家族", record.get("family", "")),
+            ("家族", record.get("installer_family", record.get("family", ""))),
             ("模式", record.get("mode", "")),
             ("状态", record.get("status", "")),
-            ("安装包", record.get("installer", "")),
-            ("目标目录", record.get("target", "")),
-            ("命令", record.get("command", "")),
+            ("安装包", record.get("installer_path", record.get("installer", ""))),
+            ("目标目录", record.get("target_dir", record.get("target", ""))),
+            ("命令预览（仅展示）", record.get("preview", record.get("legacy_preview", ""))),
+            ("旧记录说明", record.get("legacy_reason", "")),
             ("创建时间", record.get("created_at", "")),
             ("更新时间", record.get("updated_at", "")),
         ],
@@ -405,7 +452,11 @@ def installs_detail(id: int) -> None:
 def installs_run(
     id: int,
     target: str | None = typer.Option(None, "--target", help="Use a custom installation target."),
-    force: bool = typer.Option(False, "--force", help="Force-run suggest-mode suggestion."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Confirm suggest-mode launch; core safety checks remain enforced.",
+    ),
 ) -> None:
     items = load_pending_installs()
     record = next((x for x in items if int(x["id"]) == int(id)), None)
@@ -414,29 +465,70 @@ def installs_run(
         error(f"未找到安装建议 #{id}")
         raise typer.Exit(code=1)
 
+    if record.get("status") == "legacy_unsafe" or (
+        "command" in record and "executable" not in record
+    ):
+        error(text(
+            "旧版 command-only 安装建议不可信，必须重新生成后才能执行。",
+            "Legacy command-only suggestions are unsafe and must be regenerated before execution.",
+        ))
+        raise typer.Exit(code=1)
+
     if record.get("status") != "pending":
-        warn(f"安装建议 #{id} 当前状态不是 pending，而是 {record.get('status')}")
-        raise typer.Exit(code=0)
+        warn(text(
+            f"安装建议 #{id} 当前状态不是 pending，而是 {record.get('status')}",
+            f"Install suggestion #{id} is not pending; status is {record.get('status')}",
+        ))
+        raise typer.Exit(code=1)
 
     if record.get("mode") == "suggest" and not force:
-        warn("当前建议为 suggest 模式，默认不执行。")
-        info("确认要执行可添加 --force。")
-        raise typer.Exit(code=0)
+        warn(text(
+            "当前建议为 suggest 模式，默认不执行。",
+            "This suggestion is in suggest mode and is not run by default.",
+        ))
+        info(text(
+            "确认要启动可添加 --force；安全校验仍不可绕过。",
+            "Add --force to confirm launch; core safety validation still cannot be bypassed.",
+        ))
+        raise typer.Exit(code=1)
 
-    if target:
-        new_target = target.replace("\\", "/")
-        old_target = record["target"]
-        record["target"] = new_target
-        record["command"] = record["command"].replace(old_target, new_target)
+    try:
+        settings = load_settings()
+        runtime_paths = settings["runtime_paths"]
+        apps_root = runtime_paths["apps_root"]
+        installers_root = str(
+            Path(runtime_paths["archive_root"]) / "01-Software" / "_IncomingInstallers"
+        )
+        final_target = validate_install_target(
+            target if target is not None else record["target_dir"],
+            apps_root,
+        )
+        preview = rebuild_execution_fields(record, final_target)["preview"]
+    except PathPolicyError as exc:
+        fail_path_policy(exc)
+    except (KeyError, TypeError, ValueError) as exc:
+        error(text(f"安装建议结构无效: {exc}", f"Invalid install suggestion structure: {exc}"))
+        raise typer.Exit(code=1) from exc
 
-    ok(f"准备执行安装建议 #{record['id']}: {normalize_display_name(record['name'])}")
-    info(f"命令: {record['command']}")
+    ok(text(
+        f"准备启动安装建议 #{record['id']}: {normalize_display_name(record['name'])}",
+        f"Preparing to launch suggestion #{record['id']}: {normalize_display_name(record['name'])}",
+    ))
+    info(text(f"命令预览（仅展示）: {preview}", f"Command preview (display only): {preview}"))
 
-    result = run_install_record(record)
+    result = run_install_record(
+        record,
+        apps_root=apps_root,
+        installers_root=installers_root,
+        target_dir=final_target,
+    )
     if result:
-        ok(f"安装建议 #{id} 已启动执行。")
+        ok(text(
+            f"安装建议 #{id} 的进程已启动；这不代表安装成功。",
+            f"The process for suggestion #{id} was launched; this does not mean installation succeeded.",
+        ))
     else:
-        error(f"安装建议 #{id} 执行失败。")
+        error(text(f"安装建议 #{id} 启动失败或被安全策略阻止。", f"Suggestion #{id} failed to launch or was blocked by safety policy."))
         raise typer.Exit(code=1)
 
 
@@ -459,7 +551,7 @@ def installs_open(id: int) -> None:
         error(f"未找到安装建议 #{id}")
         raise typer.Exit(code=1)
 
-    installer_path = Path(record["installer"])
+    installer_path = Path(record.get("installer_path", record.get("installer", "")))
     if installer_path.exists():
         os.startfile(str(installer_path.parent))
         ok(f"已打开安装包所在目录: {installer_path.parent}")

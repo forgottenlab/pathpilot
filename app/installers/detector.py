@@ -19,6 +19,9 @@ def load_installer_rules() -> dict[str, Any]:
 
     data.setdefault("known_apps", [])
     data.setdefault("installer_families", [])
+    for rule in [*data["known_apps"], *data["installer_families"]]:
+        if isinstance(rule, dict):
+            rule["mode"] = "suggest"
     return data
 
 
@@ -49,7 +52,7 @@ def detect_installer_family(file_path: Path) -> str:
             data = f.read(1024 * 1024)
             text = data.decode("latin1", errors="ignore").lower()
 
-        if "inno setup" in text or "inno" in text:
+        if "inno setup" in text:
             return "inno_setup"
 
         if "nullsoft" in text or "nsis" in text:

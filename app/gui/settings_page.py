@@ -11,7 +11,9 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.ui_helpers import load_json_file, save_json_file
+from app.core.path_policy import PathPolicyError, normalize_path, validate_runtime_layout
 from app.core.paths import CONFIG_DIR, ensure_user_config_files
+from app.core.settings import build_runtime_paths
 
 
 class SettingsPage(QWidget):
@@ -118,6 +120,22 @@ class SettingsPage(QWidget):
 
         settings["base_paths"]["root_dir"] = root_dir
         settings["watch_directories"] = watch_dirs
+
+        try:
+            runtime_paths = build_runtime_paths(settings)
+            validated_sources = validate_runtime_layout(settings, runtime_paths)
+        except PathPolicyError as exc:
+            QMessageBox.warning(self, "路径不安全", exc.localized("zh"))
+            return
+
+        if root_dir:
+            settings["base_paths"]["root_dir"] = str(
+                normalize_path(runtime_paths["root_dir"])
+            ).replace("\\", "/")
+        settings["watch_directories"] = [
+            original if "{" in original else str(validated).replace("\\", "/")
+            for original, validated in zip(watch_dirs, validated_sources)
+        ]
 
         save_json_file(self.settings_path, settings)
 

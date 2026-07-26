@@ -7,6 +7,11 @@ from typing import Any
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from app.core.path_policy import (
+    normalize_path,
+    validate_root_directory,
+    validate_source_directory,
+)
 from app.files.classifier import classify_file
 from app.installers.queue import add_install_suggestion
 from app.installers.detector import (
@@ -166,10 +171,24 @@ class DownloadEventHandler(FileSystemEventHandler):
 
 
 def start_watching(settings: dict[str, Any], rules: dict[str, Any]) -> None:
+    runtime_paths = settings["runtime_paths"]
+    watch_dirs = settings.get("watch_directories", [])
+    incoming = normalize_path(runtime_paths["incoming_root"])
+    external_sources = [
+        directory for directory in watch_dirs
+        if normalize_path(directory) != incoming
+    ]
+    validate_root_directory(runtime_paths["root_dir"], external_sources)
+    for directory in watch_dirs:
+        validate_source_directory(
+            directory,
+            runtime_paths,
+            allow_internal_incoming=normalize_path(directory) == incoming,
+        )
+
     observer = Observer()
     handler = DownloadEventHandler(settings, rules)
 
-    watch_dirs = settings.get("watch_directories", [])
     for directory in watch_dirs:
         path = Path(directory)
         path.mkdir(parents=True, exist_ok=True)

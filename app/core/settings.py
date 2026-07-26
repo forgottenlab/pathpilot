@@ -7,6 +7,7 @@ from typing import Any
 
 import psutil
 
+from app.core.path_policy import normalize_path, validate_runtime_layout
 from app.core.paths import CONFIG_DIR, ensure_user_config_files
 
 
@@ -156,12 +157,14 @@ def load_settings() -> dict[str, Any]:
     behavior.setdefault("overwrite_strategy", "rename")
 
     runtime_paths = build_runtime_paths(settings)
+    resolved_external_sources = validate_runtime_layout(settings, runtime_paths)
+    for key in ("root_dir", "archive_root", "apps_root", "data_root", "incoming_root"):
+        runtime_paths[key] = str(normalize_path(runtime_paths[key])).replace("\\", "/")
     settings["runtime_paths"] = runtime_paths
 
-    configured_watch_dirs = settings.get("watch_directories", ["{user_downloads}"])
     resolved_watch_dirs = [
-        resolve_template(path, runtime_paths).replace("\\", "/")
-        for path in configured_watch_dirs
+        str(path).replace("\\", "/")
+        for path in resolved_external_sources
     ]
 
     incoming_root = runtime_paths["incoming_root"]

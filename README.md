@@ -109,16 +109,24 @@ G:/PathPilot
 - 安装包路径
 - 推荐安装目录
 - 安装器类型
-- 建议执行命令
-- 当前状态：`pending / executed / skipped`
+- 只读命令预览（不作为 shell 命令执行）
+- 当前状态：`pending / skipped / blocked / launched / launch_failed / legacy_unsafe`
+- 所有建议默认为 `suggest`，必须由用户明确确认
+- 文件名匹配只用于推荐信息，不表示安装器可信
 
 When an installer package is detected, PathPilot creates an install suggestion containing:
 
 - Installer path
 - Recommended target directory
 - Installer family
-- Suggested command
-- Current status: `pending / executed / skipped`
+- Read-only command preview (never executed as a shell command)
+- Current status: `pending / skipped / blocked / launched / launch_failed / legacy_unsafe`
+- Every suggestion defaults to `suggest` and requires explicit confirmation
+- Filename matching affects recommendations only; it does not establish installer trust
+
+> 安装执行仍属于 prototype。`launched` 只表示安装器进程已启动，不表示安装成功。
+>
+> Installer execution remains a prototype. `launched` means only that the installer process started; it does not mean installation succeeded.
 
 示例 / Example:
 

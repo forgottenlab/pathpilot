@@ -7,7 +7,6 @@ from app.installers.queue import (
     load_pending_installs,
     update_install_suggestion_status,
 )
-from app.installers.runner import run_install_record
 from app.core.logger import log
 
 
@@ -21,8 +20,9 @@ def list_pending() -> None:
     for item in items:
         log(
             f"#{item['id']} | {item['name']} | "
-            f"family={item['family']} | mode={item['mode']} | "
-            f"target={item['target']}"
+            f"family={item.get('installer_family', item.get('family', ''))} | "
+            f"mode={item['mode']} | "
+            f"target={item.get('target_dir', item.get('target', ''))}"
         )
 
 
@@ -37,9 +37,10 @@ def run_one(record_id: int) -> None:
         log(f"安装建议 #{record_id} 当前状态不是 pending，而是 {record.get('status')}")
         return
 
-    ok = run_install_record(record)
-    if ok:
-        log(f"安装建议 #{record_id} 已执行。")
+    log(
+        "旧式 app.manage_installs 入口不再允许启动安装器；"
+        f"请使用 pathpilot installs run {record_id} --force 进行显式确认。"
+    )
 
 
 def skip_one(record_id: int) -> None:

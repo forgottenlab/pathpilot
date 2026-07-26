@@ -80,30 +80,25 @@ DEFAULT_INSTALLER_RULES: dict[str, Any] = {
                 "filename_contains": ["ollama"]
             },
             "target": "{apps_root}/Professional/AI/Ollama",
-            "command_template": "\"{installer}\" /DIR=\"{target}\"",
             "family": "inno_setup",
-            "mode": "auto"
+            "mode": "suggest"
         }
     ],
     "installer_families": [
         {
             "family": "inno_setup",
-            "command_template": "\"{installer}\" /DIR=\"{target}\"",
-            "mode": "auto"
+            "mode": "suggest"
         },
         {
             "family": "nsis",
-            "command_template": "\"{installer}\" /D={target}",
-            "mode": "try"
+            "mode": "suggest"
         },
         {
             "family": "msi",
-            "command_template": "msiexec /i \"{installer}\"",
             "mode": "suggest"
         },
         {
             "family": "unknown",
-            "command_template": "\"{installer}\"",
             "mode": "suggest"
         }
     ]

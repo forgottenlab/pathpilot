@@ -63,7 +63,10 @@ def status_text(status_key: str, lang: str | None = None) -> str:
         "failed": ("失败", "Failed"),
         "success": ("成功", "Success"),
         "pending": ("待处理", "Pending"),
-        "executed": ("已执行", "Executed"),
+        "launched": ("已启动", "Launched"),
+        "launch_failed": ("启动失败", "Launch failed"),
+        "blocked": ("已阻止", "Blocked"),
+        "legacy_unsafe": ("旧版不安全", "Legacy unsafe"),
         "skipped": ("已跳过", "Skipped"),
     }
     zh, en = mapping.get(status_key, (status_key, status_key))

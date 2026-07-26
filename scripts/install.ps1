@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$InstallerVersion = "0.2.0"
+$InstallerVersion = "0.2.2-dev"
 $ProjectName = "PathPilot"
 $PackageName = "pathpilot"
 

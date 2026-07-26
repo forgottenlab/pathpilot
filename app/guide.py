@@ -33,7 +33,7 @@ def show_command_guide(lang: str = "zh") -> None:
         ("9", "pathpilot installs list", cell_text("查看待处理安装建议", "List pending install suggestions", lang)),
         ("10", "pathpilot installs list --all", cell_text("查看全部安装建议历史", "List all install suggestions", lang)),
         ("11", "pathpilot installs detail <id>", cell_text("查看某条安装建议详情", "Show install suggestion detail", lang)),
-        ("12", "pathpilot installs run <id>", cell_text("执行 auto/try 安装建议", "Run an auto/try install suggestion", lang)),
+        ("12", "pathpilot installs run <id> --force", cell_text("确认并启动 suggest 安装建议", "Confirm and launch a suggest-mode installer", lang)),
         ("13", "pathpilot installs run <id> --force", cell_text("强制执行 suggest 建议", "Force-run a suggest suggestion", lang)),
         ("14", "pathpilot installs skip <id>", cell_text("跳过安装建议", "Skip install suggestion", lang)),
         ("15", "pathpilot sources list", cell_text("查看监听来源目录", "List source directories", lang)),
