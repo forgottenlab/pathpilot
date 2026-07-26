@@ -13,7 +13,11 @@ from typer.testing import CliRunner
 
 from app import __version__
 from app import cli
-from scripts.check_release_artifacts import check_archive
+from scripts.check_release_artifacts import (
+    REQUIRED_SDIST_FILES,
+    REQUIRED_WHEEL_FILES,
+    check_archive,
+)
 
 
 ROOT = Path(__file__).parents[1]
@@ -117,7 +121,14 @@ def test_key_cli_output_supports_zh_en_and_chinese_first_bilingual() -> None:
 
 
 def test_release_documents_metadata_shipgit_and_versions() -> None:
-    for name in ("LICENSE", "SECURITY.md", "CHANGELOG.md", "CONTRIBUTING.md"):
+    for name in (
+        "LICENSE",
+        "SECURITY.md",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "README.md",
+        "README.zh-CN.md",
+    ):
         assert (ROOT / name).is_file()
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
     assert license_text.startswith("MIT License")
@@ -153,6 +164,10 @@ def test_artifact_checker_accepts_packages_and_rejects_private_state(tmp_path: P
     with zipfile.ZipFile(wheel, "w") as archive:
         for prefix in ("app/core/", "app/files/", "app/installers/", "app/gui/"):
             archive.writestr(f"{prefix}__init__.py", "")
+        for readme in ("README.md", "README.zh-CN.md"):
+            archive.writestr(
+                f"pathpilot-0.2.2.data/data/share/doc/pathpilot/{readme}", "docs"
+            )
     check_archive(wheel)
 
     bad = tmp_path / "pathpilot-0.2.2.tar.gz"
@@ -162,6 +177,75 @@ def test_artifact_checker_accepts_packages_and_rejects_private_state(tmp_path: P
         archive.add(payload, arcname="pathpilot-0.2.2/data/pending_installs.json")
     with pytest.raises(RuntimeError, match="forbidden|runtime state"):
         check_archive(bad)
+
+
+def test_readmes_are_split_by_language_and_match_the_release_contract() -> None:
+    english = (ROOT / "README.md").read_text(encoding="utf-8")
+    chinese = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+    language_links = "[English](README.md) | [简体中文](README.zh-CN.md)"
+    assert language_links in english
+    assert language_links in chinese
+
+    required_terms = (
+        "0.2.2",
+        "CLI-only",
+        "GUI extra",
+        "PATHPILOT_HOME",
+        "doctor",
+        "test",
+        "suggest",
+        "legacy_unsafe",
+        "launched",
+        "--force",
+        "SECURITY.md",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        "MIT License",
+    )
+    for readme in (english, chinese):
+        for term in required_terms:
+            assert term in readme
+
+    real_commands = (
+        "pathpilot guide",
+        "pathpilot commands",
+        "pathpilot doctor",
+        "pathpilot test",
+        "pathpilot status",
+        "pathpilot watch",
+        "pathpilot ui",
+        "pathpilot version",
+        "pathpilot config show",
+        "pathpilot config set-root <path>",
+        "pathpilot config reset-root",
+        "pathpilot sources list",
+        "pathpilot sources add <path>",
+        "pathpilot sources remove <path>",
+        "pathpilot installs list [--all]",
+        "pathpilot installs detail <id>",
+        "pathpilot installs run <id> --force",
+        "pathpilot installs skip <id>",
+        "pathpilot installs open <id>",
+    )
+    for readme in (english, chinese):
+        assert all(command in readme for command in real_commands)
+
+    assert "## Requirements /" not in english
+    assert "Windows 下载整理与安全安装建议治理工具" not in english
+    assert "## 环境要求 /" not in chinese
+    assert "PathPilot 解决什么问题" in chinese
+    assert "只生成保守、可审查的安装建议" in chinese
+
+    project = _pyproject()["project"]
+    assert project["readme"] == "README.md"
+    data_files = _pyproject()["tool"]["setuptools"]["data-files"]
+    assert set(data_files["share/doc/pathpilot"]) == {"README.md", "README.zh-CN.md"}
+    assert REQUIRED_WHEEL_FILES == {"README.md", "README.zh-CN.md"}
+    assert {"README.md", "README.zh-CN.md"}.issubset(REQUIRED_SDIST_FILES)
+
+    manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+    assert "include README.md" in manifest
+    assert "include README.zh-CN.md" in manifest
 
 
 def _workflow_job_block(workflow: str, job_name: str) -> str:

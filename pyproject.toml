@@ -53,6 +53,9 @@ Issues = "https://github.com/forgottenlab/pathpilot/issues"
 [tool.setuptools]
 include-package-data = false
 
+[tool.setuptools.data-files]
+"share/doc/pathpilot" = ["README.md", "README.zh-CN.md"]
+
 [tool.setuptools.packages.find]
 include = ["app", "app.*"]
 exclude = ["tests", "tests.*"]

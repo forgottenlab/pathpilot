@@ -21,7 +21,15 @@ REQUIRED_WHEEL_PREFIXES = {
     "app/installers/",
     "app/gui/",
 }
-REQUIRED_SDIST_FILES = {"CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "README.md", "SECURITY.md"}
+REQUIRED_WHEEL_FILES = {"README.md", "README.zh-CN.md"}
+REQUIRED_SDIST_FILES = {
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "README.md",
+    "README.zh-CN.md",
+    "SECURITY.md",
+}
 
 
 def archive_names(path: Path) -> list[str]:
@@ -37,6 +45,13 @@ def check_archive(path: Path) -> None:
     for name in names:
         parts = set(Path(name).parts)
         forbidden = parts.intersection(FORBIDDEN_PARTS)
+        wheel_doc = (
+            path.suffix == ".whl"
+            and Path(name).name in REQUIRED_WHEEL_FILES
+            and "/data/share/doc/pathpilot/" in name.replace("\\", "/")
+        )
+        if wheel_doc:
+            forbidden.discard("data")
         if forbidden:
             raise RuntimeError(f"{path.name} contains forbidden path {name}: {sorted(forbidden)}")
         lowered = name.lower()
@@ -47,6 +62,10 @@ def check_archive(path: Path) -> None:
         for prefix in REQUIRED_WHEEL_PREFIXES:
             if not any(name.startswith(prefix) for name in names):
                 raise RuntimeError(f"{path.name} is missing package prefix: {prefix}")
+        basenames = {Path(name).name for name in names}
+        missing = REQUIRED_WHEEL_FILES.difference(basenames)
+        if missing:
+            raise RuntimeError(f"{path.name} is missing release documents: {sorted(missing)}")
     else:
         basenames = {Path(name).name for name in names}
         missing = REQUIRED_SDIST_FILES.difference(basenames)

@@ -9,6 +9,7 @@ include CHANGELOG.md
 include CONTRIBUTING.md
 include LICENSE
 include README.md
+include README.zh-CN.md
 include SECURITY.md
 
 global-exclude *.corrupt

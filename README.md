@@ -1,57 +1,65 @@
 # PathPilot for Windows
 
-> Windows 下载整理与安全安装建议治理工具。<br>
-> A Windows download organizer and safe installer-suggestion governance tool.
+[English](README.md) | [简体中文](README.zh-CN.md)
 
 [![Python](https://img.shields.io/badge/Python-3.12%20%7C%203.13-blue)](https://www.python.org/)
 [![Windows CI](https://github.com/forgottenlab/pathpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/forgottenlab/pathpilot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-PathPilot 监听用户明确配置的下载来源，把稳定文件收口到受管 Incoming
-目录，再按文档、代码、压缩包、媒体或安装包分类。对于 `.exe`/`.msi`，它只生成
-保守的安装建议，不会因为文件名或预览命令而自动信任安装器。
+PathPilot is a Windows download organizer and safe installer-suggestion governance tool. It watches only the source directories you configure, moves stable files through a managed Incoming directory, and classifies documents, code, archives, media, and installers.
 
-PathPilot watches explicitly configured download sources, moves stable files
-through a managed Incoming directory, and classifies documents, code, archives,
-media, and installers. For `.exe`/`.msi`, it creates conservative suggestions;
-file names and command previews never establish trust.
+For `.exe` and `.msi` files, PathPilot creates conservative, reviewable suggestions. It does not trust an installer because of its file name, detected family, or command preview. Version 0.2.2 is an alpha/prototype intended for careful evaluation with inert fixtures before real-world use.
 
-PathPilot 0.2.2 仍是 Windows alpha/prototype。请先使用不可执行 fixture 验证你的规则。
-PathPilot 0.2.2 remains a Windows alpha/prototype. Validate rules with inert fixtures first.
+## 🎯 What PathPilot solves
 
-## Requirements / 环境要求
+Download folders quickly become a mixture of documents, source files, archives, media, and installers. PathPilot provides one observable flow for moving stable files into a managed tree while keeping installer launch behind an explicit security boundary.
+
+PathPilot is most useful for Windows users who want:
+
+- repeatable classification of newly downloaded files;
+- an auditable pending queue for installer suggestions;
+- the same safety checks in the CLI and optional GUI;
+- isolated configuration and behavioral testing for development or CI.
+
+| Capability | Current behavior |
+|---|---|
+| File organization | Stable files pass through Incoming before final classification |
+| Installer handling | `.exe` and `.msi` files move to `_IncomingInstallers` and create suggestions |
+| Execution | Structured argv with `shell=False`, after containment validation |
+| State | Atomic JSON writes with finite-time process locks |
+| Diagnostics | `doctor` is read-only; `test` uses fully isolated temporary state |
+
+## 📋 Requirements
 
 - Windows 11
 - Python 3.12 or 3.13
 - `pipx` for normal installation
 
-## Installation / 安装
+PathPilot is Windows-first. Equivalent watcher behavior on Linux or macOS is not currently claimed.
 
-CLI-only 安装不包含 PySide6：
-CLI-only installation does not include PySide6:
+## 📦 Installation
+
+Install the CLI-only package when you do not need the Qt interface. This does not install PySide6:
 
 ```powershell
 python -m pip install --user pipx
 python -m pipx install git+https://github.com/forgottenlab/pathpilot.git
 ```
 
-带 GUI 的完整安装：
-Full installation with the optional GUI:
+Install the GUI extra when you need `pathpilot ui`:
 
 ```powershell
 python -m pipx install "pathpilot[gui] @ git+https://github.com/forgottenlab/pathpilot.git"
 ```
 
-从本地 checkout 安装：
-Install from a local checkout:
+From a local checkout:
 
 ```powershell
 python -m pipx install .
 python -m pipx install ".[gui]"
 ```
 
-安装脚本默认安装 CLI + GUI；`-CliOnly` 只安装核心 CLI：
-The install script defaults to CLI + GUI; `-CliOnly` installs the core CLI only:
+The installation script installs the CLI and GUI by default. Use `-CliOnly` for the core CLI:
 
 ```powershell
 .\scripts\install.ps1
@@ -60,14 +68,11 @@ The install script defaults to CLI + GUI; `-CliOnly` installs the core CLI only:
 .\scripts\uninstall.ps1
 ```
 
-卸载默认只删除 pipx 程序，不删除用户配置或受管文件。只有显式指定
-`-RemoveUserConfig` 并确认时才删除 PathPilot 用户状态。
+Uninstall removes only the pipx application by default. It removes PathPilot user state only when `-RemoveUserConfig` is explicitly supplied and confirmed. It never deletes the managed Downloads or Apps trees.
 
-Uninstall removes only the pipx application by default. User state is removed
-only with an explicit, confirmed `-RemoveUserConfig` option. Managed Downloads
-and Apps trees are never removed by the uninstaller.
+## 🚀 First run
 
-## First run / 首次运行
+Start by checking status and learning the command surface:
 
 ```powershell
 pathpilot status
@@ -76,53 +81,49 @@ pathpilot test
 pathpilot commands
 ```
 
-- `doctor`：只读诊断，不创建或重写配置。<br>
-  `doctor`: read-only diagnostics; it does not create or rewrite state.
-- `test`：在临时 `PATHPILOT_HOME` 和临时受管根目录中执行隔离行为测试。<br>
-  `test`: isolated behavior checks using temporary state and managed roots.
-- `watch`：持续监听配置的来源目录，直到用户停止。<br>
-  `watch`: continuously watches configured sources until stopped.
+- `doctor` performs read-only diagnostics. It does not create or rewrite configuration.
+- `test` runs an isolated behavior check with a temporary `PATHPILOT_HOME` and managed root.
+- `watch` continuously monitors configured sources until you stop it.
+- `ui` starts the optional GUI. In a CLI-only installation it exits nonzero with a clear `pathpilot[gui]` hint and no Python traceback.
 
-CLI-only 环境运行 `pathpilot ui` 会返回非零退出码和清晰的 `pathpilot[gui]`
-安装提示，不输出 Python traceback。
+Before starting the watcher, review the active root and sources:
 
-In a CLI-only environment, `pathpilot ui` exits nonzero with a clear
-`pathpilot[gui]` installation hint and no Python traceback.
+```powershell
+pathpilot config show
+pathpilot sources list
+pathpilot watch
+```
 
-## Commands / 命令
+## 🧭 Command reference
 
-| Command | 中文说明 / English description |
+| Command | Purpose |
 |---|---|
-| `pathpilot` | 显示完整指引 / Show the command guide |
-| `pathpilot guide`, `pathpilot commands` | 命令指引 / Command guide |
-| `pathpilot doctor` | 只读诊断 / Read-only diagnostics |
-| `pathpilot test` | 隔离行为测试 / Isolated behavior test |
-| `pathpilot status` | 当前状态 / Current status |
-| `pathpilot watch` | 持续监听 / Continuous watcher |
-| `pathpilot ui` | 可选 GUI / Optional GUI |
-| `pathpilot version`, `-v`, `--version` | 版本 / Version |
-| `pathpilot config show` | 显示配置 / Show configuration |
-| `pathpilot config set-root <path>` | 设置根目录 / Set root |
-| `pathpilot config reset-root` | 恢复自动选择 / Restore auto-selection |
-| `pathpilot sources list` | 来源列表 / List sources |
-| `pathpilot sources add <path>` | 添加来源 / Add source |
-| `pathpilot sources remove <path>` | 移除来源 / Remove source |
-| `pathpilot installs list [--all]` | 建议列表 / List suggestions |
-| `pathpilot installs detail <id>` | 建议详情 / Suggestion details |
-| `pathpilot installs run <id> --force` | 显式确认启动 / Explicitly confirm launch |
-| `pathpilot installs skip <id>` | 跳过建议 / Skip suggestion |
-| `pathpilot installs open <id>` | 打开安装包目录 / Open installer directory |
+| `pathpilot` | Show the command guide |
+| `pathpilot guide` | Show the detailed command guide |
+| `pathpilot commands` | Show the same maintained command guide |
+| `pathpilot doctor` | Run read-only diagnostics |
+| `pathpilot test` | Run an isolated behavior test |
+| `pathpilot status` | Show current configuration and queue status |
+| `pathpilot watch` | Continuously watch configured source directories |
+| `pathpilot ui` | Start the optional GUI |
+| `pathpilot version`, `pathpilot -v`, `pathpilot --version` | Show the version |
+| `pathpilot config show` | Show configuration |
+| `pathpilot config set-root <path>` | Set the managed root |
+| `pathpilot config reset-root` | Restore automatic root selection |
+| `pathpilot sources list` | List source directories |
+| `pathpilot sources add <path>` | Add a source directory |
+| `pathpilot sources remove <path>` | Remove a source directory |
+| `pathpilot installs list [--all]` | List installer suggestions |
+| `pathpilot installs detail <id>` | Show suggestion details |
+| `pathpilot installs run <id> --force` | Explicitly confirm an eligible launch |
+| `pathpilot installs skip <id>` | Skip a pending suggestion |
+| `pathpilot installs open <id>` | Open the installer's containing directory |
 
-`--force` 只确认启动，不能绕过 installer containment、Apps target containment、
-legacy record 或结构化参数检查。
+Invalid input and safety rejection return nonzero exit codes. `--force` confirms launch intent only; it cannot bypass installer containment, Apps target containment, legacy-record rejection, or structured-argument validation.
 
-`--force` confirms launch only. It cannot bypass installer containment, Apps
-target containment, legacy-record rejection, or structured-argument checks.
+## 🌐 CLI languages
 
-## Language / 语言
-
-PathPilot 自维护的 CLI 文本支持中文、英文和先中文后英文的双语模式：
-Maintained CLI output supports Chinese, English, and Chinese-first bilingual output:
+Maintained CLI output supports `zh`, `en`, and Chinese-first bilingual `bi` modes:
 
 ```powershell
 pathpilot --lang zh status
@@ -130,12 +131,10 @@ pathpilot --lang en doctor
 pathpilot --lang bi installs list --all
 ```
 
-Typer 自动生成的部分框架 help 文本可能保持英文。
-Some framework-generated Typer help text may remain English.
+Some framework-generated Typer help text may remain in English.
 
-## State and PATHPILOT_HOME / 状态与隔离
+## 🗂 State and PATHPILOT_HOME
 
-默认用户状态位于：
 Default user state is stored under:
 
 ```text
@@ -149,38 +148,43 @@ Default user state is stored under:
    └─ logs/pathpilot.log
 ```
 
-测试和开发必须设置临时 `PATHPILOT_HOME`。该变量动态隔离配置、数据、日志、
-pending queue 和默认 runtime paths，不会在 import 时缓存真实用户目录。
+Set `PATHPILOT_HOME` to isolate configuration, data, logs, the pending queue, and default runtime paths. Paths are resolved dynamically rather than permanently cached when a module is imported.
 
-Tests and development must set a temporary `PATHPILOT_HOME`. It dynamically
-isolates configuration, data, logs, the pending queue, and default runtime paths.
+Development and tests must use a temporary value:
 
-## Installer safety and states / 安装器安全与状态
+```powershell
+$env:PATHPILOT_HOME = Join-Path $env:TEMP "pathpilot-dev"
+pathpilot doctor
+```
 
-- 所有建议默认 `mode=suggest`；文件名和 installer family 只影响推荐。
-- `preview` 仅展示，绝不作为 shell 字符串执行。
-- `legacy_unsafe` command-only 记录不可执行。
-- installer 必须位于受管 `_IncomingInstallers`，target 必须是 `Apps` 的子目录。
-- PathPilot 当前不提供 Authenticode publisher/signature 信任判断。
+## 🛡 Installer safety model
 
-- Every suggestion defaults to `mode=suggest`; names and families affect recommendations only.
-- `preview` is display-only and is never executed as a shell string.
-- `legacy_unsafe` command-only records cannot run.
-- Installers must stay in `_IncomingInstallers`; targets must be children of `Apps`.
-- PathPilot does not currently provide Authenticode publisher/signature trust decisions.
+PathPilot treats classification as a suggestion, not a trust decision:
+
+- every installer suggestion defaults to `mode=suggest` and `status=pending`;
+- file names and installer-family detection influence recommendations only;
+- `preview` is display-only and is never executed as a shell command;
+- `legacy_unsafe` command-only records cannot be executed;
+- the installer must remain under managed `_IncomingInstallers`;
+- the target must remain under the managed `Apps` directory;
+- `--force` cannot bypass any containment or record validation;
+- PathPilot does not provide Authenticode publisher/signature trust decisions;
+- PathPilot does not track installation completion.
 
 | Status | Meaning |
 |---|---|
-| `pending` | 等待明确操作 / Awaiting explicit action |
-| `skipped` | 用户跳过 / Skipped by the user |
-| `blocked` | 安全检查拒绝 / Rejected by safety checks |
-| `launch_failed` | 进程未能启动 / Process failed to start |
-| `launched` | 仅表示进程启动，不表示 installed/completed/success / Process started only; not installation success |
-| `legacy_unsafe` | 旧 command-only 记录，不可执行 / Legacy command-only record; not executable |
+| `pending` | Awaiting explicit user action |
+| `skipped` | Skipped by the user |
+| `blocked` | Rejected by a safety check |
+| `launch_failed` | The process could not be started |
+| `launched` | The process started only; this does not mean installed, completed, or successful |
+| `legacy_unsafe` | Legacy command-only record; never executable |
 
-See [SECURITY.md](SECURITY.md) for private vulnerability reporting and the full boundary.
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting and the complete current boundary.
 
-## Development and CI / 开发与 CI
+## 🧪 Development, testing, and CI
+
+Use a dedicated virtual environment or Conda environment. Install development and GUI dependencies through extras:
 
 ```powershell
 python -m venv .venv
@@ -193,21 +197,30 @@ python -m build
 .\scripts\full_check.ps1
 ```
 
-Windows CI runs the core test matrix on Python 3.12 and 3.13, builds wheel and
-sdist artifacts, tests a CLI-only wheel, and runs one separate GUI offscreen smoke.
+Windows CI runs core tests on Python 3.12 and 3.13, checks PowerShell syntax, builds wheel and sdist artifacts, installs a fresh CLI-only wheel, and runs a separate GUI extra offscreen smoke. Tests use temporary state and inert fixtures; they never run real installers.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
+Release artifacts are checked to include both `README.md` and `README.zh-CN.md` while excluding `.ai`, tests, runtime data, logs, backups, and user configuration.
 
-## Prototype limitations / 原型限制
+## 🗺 Roadmap
 
-- Windows-first; Linux/macOS watcher parity is not claimed.
-- Cross-volume moves and all interactive GUI paths are not fully automated.
-- No Authenticode trust decision.
-- No installation-completion tracking.
-- No claim that an installer is safe merely because it was classified or launched.
+Future work may improve watcher retries, cross-volume behavior, and GUI interaction coverage. Authenticode evaluation and installation-completion tracking are deliberately outside the current 0.2.2 boundary and are not implemented claims.
 
-## License / 许可证
+## ⚠️ Prototype limitations
 
-PathPilot is licensed under the [MIT License](LICENSE).
+- Windows-first; Linux and macOS watcher parity is not claimed.
+- Cross-volume moves and every interactive GUI path are not fully automated in tests.
+- There is no Authenticode trust decision.
+- There is no installation-completion tracking.
+- Classification, suggestion, or `launched` status never proves that an installer is safe or successfully installed.
+
+## 📚 Project policies
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) explains the development and pull-request gates.
+- [SECURITY.md](SECURITY.md) explains private vulnerability reporting and security boundaries.
+- [CHANGELOG.md](CHANGELOG.md) records release changes.
+
+## 📄 License
+
+PathPilot is released under the [MIT License](LICENSE).
 
 Copyright (c) 2026 forgottenlab.
