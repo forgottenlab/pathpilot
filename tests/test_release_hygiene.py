@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import sys
 import tarfile
 import tomllib
@@ -163,6 +164,15 @@ def test_artifact_checker_accepts_packages_and_rejects_private_state(tmp_path: P
         check_archive(bad)
 
 
+def _workflow_job_block(workflow: str, job_name: str) -> str:
+    match = re.search(
+        rf"(?ms)^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [a-zA-Z][a-zA-Z0-9_-]*:\n|\Z)",
+        workflow,
+    )
+    assert match is not None, f"missing workflow job: {job_name}"
+    return match.group("body")
+
+
 def test_ci_has_core_package_and_gui_jobs() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     for fragment in (
@@ -178,3 +188,34 @@ def test_ci_has_core_package_and_gui_jobs() -> None:
         "assert m.version('pathpilot') == '0.2.2'",
     ):
         assert fragment in workflow
+
+
+def test_ci_configures_isolated_home_at_runtime_for_each_job() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "PATHPILOT_HOME: ${{ runner.temp }}" not in workflow
+    assert "C:\\Users\\" not in workflow
+
+    expected = {
+        "core": (
+            "pathpilot-core-${{ matrix.python-version }}",
+            "python -m pip install",
+        ),
+        "package": ("pathpilot-package", "python -m build"),
+        "gui-smoke": ("pathpilot-gui", "Install GUI extra and create window offscreen"),
+    }
+    for job_name, (home_suffix, first_operation) in expected.items():
+        block = _workflow_job_block(workflow, job_name)
+        configure_at = block.index("- name: Configure isolated PathPilot state")
+        checkout_at = block.index("- uses: actions/checkout@v4")
+        operation_at = block.index(first_operation)
+
+        assert "QT_QPA_PLATFORM: offscreen" in block
+        assert f"$env:RUNNER_TEMP\\{home_suffix}" in block
+        assert "Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append" in block
+        assert configure_at < checkout_at < operation_at
+
+    core = _workflow_job_block(workflow, "core")
+    assert 'python-version: ["3.12", "3.13"]' in core
+    package = _workflow_job_block(workflow, "package")
+    assert "CLI-only wheel smoke" in package
+    assert "gui-smoke:" in workflow

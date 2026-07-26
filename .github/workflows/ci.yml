@@ -13,9 +13,13 @@ jobs:
         python-version: ["3.12", "3.13"]
     env:
       QT_QPA_PLATFORM: offscreen
-      PATHPILOT_HOME: ${{ runner.temp }}\pathpilot-core-${{ matrix.python-version }}
 
     steps:
+      - name: Configure isolated PathPilot state
+        shell: pwsh
+        run: |
+          "PATHPILOT_HOME=$env:RUNNER_TEMP\pathpilot-core-${{ matrix.python-version }}" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -54,8 +58,12 @@ jobs:
     runs-on: windows-latest
     env:
       QT_QPA_PLATFORM: offscreen
-      PATHPILOT_HOME: ${{ runner.temp }}\pathpilot-package
     steps:
+      - name: Configure isolated PathPilot state
+        shell: pwsh
+        run: |
+          "PATHPILOT_HOME=$env:RUNNER_TEMP\pathpilot-package" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -96,8 +104,12 @@ jobs:
     runs-on: windows-latest
     env:
       QT_QPA_PLATFORM: offscreen
-      PATHPILOT_HOME: ${{ runner.temp }}\pathpilot-gui
     steps:
+      - name: Configure isolated PathPilot state
+        shell: pwsh
+        run: |
+          "PATHPILOT_HOME=$env:RUNNER_TEMP\pathpilot-gui" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
