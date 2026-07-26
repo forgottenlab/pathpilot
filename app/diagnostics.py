@@ -152,11 +152,11 @@ def run_doctor_report(lang: str = "zh") -> bool:
 
     pyside_ok = importlib.util.find_spec("PySide6") is not None
     checks.append((
-        "GUI 依赖 PySide6",
-        "GUI dependency PySide6",
-        pyside_ok,
-        "PySide6 可用" if pyside_ok else "未检测到 PySide6",
-        "PySide6 available" if pyside_ok else "PySide6 not found",
+        "GUI 可选依赖",
+        "Optional GUI dependency",
+        True,
+        "PySide6 可用" if pyside_ok else "未安装 PySide6；CLI 功能不受影响",
+        "PySide6 available" if pyside_ok else "PySide6 is not installed; CLI features remain available",
     ))
 
     for index, (zh, en, passed, detail_zh, detail_en) in enumerate(checks, start=1):

@@ -90,18 +90,18 @@ def build_runtime_paths(settings: dict[str, Any]) -> dict[str, Any]:
         root_dir = configured_root_dir.replace("\\", "/")
         candidates: list[tuple[str, int]] = []
         system_drive = get_system_drive()
-        root_selection_reason = "使用用户自定义根目录"
+        root_selection_reason = "custom"
     elif isolated_runtime is not None:
         root_dir = str(isolated_runtime / "managed").replace("\\", "/")
         candidates = []
         system_drive = get_system_drive()
-        root_selection_reason = "PATHPILOT_HOME 隔离运行时根目录"
+        root_selection_reason = "isolated"
     else:
         root_dir, candidates, system_drive = detect_best_root_dir()
         if candidates:
-            root_selection_reason = "自动选择非系统盘中剩余空间最大的盘"
+            root_selection_reason = "non_system"
         else:
-            root_selection_reason = "未找到合适的非系统盘，退回系统盘"
+            root_selection_reason = "system_fallback"
 
     archive_root = f"{root_dir}/Downloads"
     apps_root = f"{root_dir}/Apps"

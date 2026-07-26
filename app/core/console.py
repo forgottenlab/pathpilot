@@ -8,6 +8,8 @@ from rich.table import Table
 from rich.text import Text
 from rich import box
 
+from app.core.i18n import cell_text, get_lang
+
 
 console = Console()
 
@@ -58,7 +60,7 @@ def error(message: str) -> None:
     console.print(f"[red]✗[/red] {message}")
 
 
-def kv_table(title: str, rows: Iterable[tuple[str, object]]) -> None:
+def kv_table(title: str, rows: Iterable[tuple[str, object]], lang: str | None = None) -> None:
     table = Table(
         title=title,
         box=box.SQUARE,
@@ -66,8 +68,9 @@ def kv_table(title: str, rows: Iterable[tuple[str, object]]) -> None:
         expand=False,
         border_style="cyan",
     )
-    table.add_column("项目", style="cyan", min_width=14, overflow="fold")
-    table.add_column("内容", min_width=36, overflow="fold")
+    active_lang = lang or get_lang()
+    table.add_column(cell_text("项目", "Item", active_lang), style="cyan", min_width=14, overflow="fold")
+    table.add_column(cell_text("内容", "Value", active_lang), min_width=36, overflow="fold")
 
     for key, value in rows:
         table.add_row(str(key), str(value))
@@ -97,7 +100,7 @@ def simple_table(
     console.print(table)
 
 
-def path_list(title: str, paths: Iterable[str]) -> None:
+def path_list(title: str, paths: Iterable[str], lang: str | None = None) -> None:
     rows = [
         [str(index), path]
         for index, path in enumerate(paths, start=1)
@@ -107,7 +110,7 @@ def path_list(title: str, paths: Iterable[str]) -> None:
         title,
         [
             ("No.", {"style": "magenta", "width": 4, "justify": "right"}),
-            ("路径", {"style": "cyan", "min_width": 42, "overflow": "fold"}),
+            (cell_text("路径", "Path", lang or get_lang()), {"style": "cyan", "min_width": 42, "overflow": "fold"}),
         ],
         rows,
     )

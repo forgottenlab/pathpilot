@@ -1,6 +1,6 @@
 project:
   name: PathPilot
-  defaultBranch: master
+  defaultBranch: main
 ui:
   language: zh
 remotes:

@@ -26,6 +26,7 @@ from app.installers.strategy import (
     build_suggestion_from_known_app,
 )
 from app.core.logger import log
+from app.core.i18n import text
 from app.files.mover import move_file
 from app.files.utils import ensure_dir, is_hidden, wait_until_file_stable
 
@@ -105,7 +106,10 @@ class DownloadEventHandler(FileSystemEventHandler):
                 family_rule = get_family_rule(family, self.installer_rules)
 
                 if not family_rule:
-                    log(f"未找到安装器家族规则，仅归档保留: {file_path}")
+                    log(text(
+                        f"未找到安装器家族规则，仅归档保留: {file_path}",
+                        f"No installer-family rule found; archived only: {file_path}",
+                    ))
                     return
 
                 suggestion = build_suggestion_from_family(
@@ -118,7 +122,10 @@ class DownloadEventHandler(FileSystemEventHandler):
             log_install_suggestion(record)
 
         except Exception as e:
-            log(f"安装器建议处理失败: {file_path} | 错误: {e}")
+            log(text(
+                f"安装器建议处理失败: {file_path} | 错误: {e}",
+                f"Installer suggestion handling failed: {file_path} | Error: {e}",
+            ))
 
     def _handle_file(self, file_path: Path) -> None:
         try:
@@ -132,7 +139,7 @@ class DownloadEventHandler(FileSystemEventHandler):
                 return
 
             if self._should_skip_recent(file_path):
-                log(f"跳过短时间重复事件: {file_path}")
+                log(text(f"跳过短时间重复事件: {file_path}", f"Skipped duplicate event: {file_path}"))
                 return
 
             stable_seconds = int(self.behavior.get("stable_check_seconds", 2))
@@ -143,7 +150,7 @@ class DownloadEventHandler(FileSystemEventHandler):
                 stable_seconds=stable_seconds,
                 checks=stable_checks
             ):
-                log(f"跳过不稳定文件: {file_path}")
+                log(text(f"跳过不稳定文件: {file_path}", f"Skipped unstable file: {file_path}"))
                 return
 
             current_parent = file_path.parent.resolve()
@@ -151,23 +158,23 @@ class DownloadEventHandler(FileSystemEventHandler):
             if current_parent != self.incoming_root:
                 ensure_dir(self.incoming_root)
                 new_path = move_file(file_path, self.incoming_root)
-                log(f"已收口到 Incoming: {file_path} -> {new_path}")
+                log(text(f"已收口到 Incoming: {file_path} -> {new_path}", f"Moved into Incoming: {file_path} -> {new_path}"))
                 return
 
             target_dir = classify_file(file_path, self.rules, self.runtime_paths)
             ensure_dir(target_dir)
 
             if current_parent == target_dir.resolve():
-                log(f"文件已在目标目录，跳过: {file_path}")
+                log(text(f"文件已在目标目录，跳过: {file_path}", f"File already in target directory; skipped: {file_path}"))
                 return
 
             new_path = move_file(file_path, target_dir)
-            log(f"已二次分类: {file_path} -> {new_path}")
+            log(text(f"已二次分类: {file_path} -> {new_path}", f"Classified into final directory: {file_path} -> {new_path}"))
 
             self._try_handle_installer(new_path)
 
         except Exception as e:
-            log(f"处理失败: {file_path} | 错误: {e}")
+            log(text(f"处理失败: {file_path} | 错误: {e}", f"File handling failed: {file_path} | Error: {e}"))
 
 
 def start_watching(settings: dict[str, Any], rules: dict[str, Any]) -> None:
@@ -193,7 +200,7 @@ def start_watching(settings: dict[str, Any], rules: dict[str, Any]) -> None:
         path = Path(directory)
         path.mkdir(parents=True, exist_ok=True)
         observer.schedule(handler, str(path), recursive=False)
-        log(f"开始监听目录: {path}")
+        log(text(f"开始监听目录: {path}", f"Watching directory: {path}"))
 
     observer.start()
 
@@ -201,7 +208,7 @@ def start_watching(settings: dict[str, Any], rules: dict[str, Any]) -> None:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        log("收到退出信号，正在停止监听...")
+        log(text("收到退出信号，正在停止监听...", "Stop signal received; stopping watcher..."))
         observer.stop()
 
     observer.join()

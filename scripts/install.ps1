@@ -1,11 +1,12 @@
 param(
     [string]$InstallSource = "",
-    [switch]$SkipSelfTest
+    [switch]$SkipSelfTest,
+    [switch]$CliOnly
 )
 
 $ErrorActionPreference = "Stop"
 
-$InstallerVersion = "0.2.2-dev"
+$InstallerVersion = "0.2.2"
 $ProjectName = "PathPilot"
 $PackageName = "pathpilot"
 
@@ -84,14 +85,36 @@ function Resolve-DefaultInstallSource {
     return "git+https://github.com/forgottenlab/pathpilot.git"
 }
 
+function Resolve-InstallSpec {
+    param([string]$Source, [bool]$InstallCliOnly)
+
+    if ($InstallCliOnly) {
+        return $Source
+    }
+    if (Test-Path -LiteralPath $Source) {
+        $resolved = (Resolve-Path -LiteralPath $Source).Path
+        $uri = [System.Uri]::new($resolved).AbsoluteUri
+        return "pathpilot[gui] @ $uri"
+    }
+    if ($Source.StartsWith("git+", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return "pathpilot[gui] @ $Source"
+    }
+    if ($Source -match "\[[^\]]+\]") {
+        return $Source
+    }
+    return "$Source[gui]"
+}
+
 if ([string]::IsNullOrWhiteSpace($InstallSource)) {
     $InstallSource = Resolve-DefaultInstallSource
 }
+$InstallSpec = Resolve-InstallSpec $InstallSource $CliOnly.IsPresent
 
 Write-Section "PathPilot Installer / PathPilot 安装程序"
 
 Write-Host "Installer Version / 安装器版本: $InstallerVersion"
 Write-Host "Install Source / 安装来源: $InstallSource"
+Write-Host "Install Mode / 安装模式: $(if ($CliOnly) { 'CLI only' } else { 'CLI + GUI' })"
 Write-Host ""
 Write-Host "Privacy / 隐私说明:" -ForegroundColor Yellow
 Write-Host "- PathPilot does not upload your personal files, installer files, or paths."
@@ -136,10 +159,10 @@ else {
 Write-Section "Installing or Updating PathPilot / 安装或更新 PathPilot"
 
 Write-Host "Running / 正在执行:"
-Write-Host "$PythonCommand -m pipx install --force $InstallSource"
+Write-Host "$PythonCommand -m pipx install --force $InstallSpec"
 Write-Host ""
 
-Invoke-External $PythonCommand @("-m", "pipx", "install", "--force", $InstallSource)
+Invoke-External $PythonCommand @("-m", "pipx", "install", "--force", $InstallSpec)
 
 Write-Section "Verifying Installation / 验证安装"
 
@@ -186,9 +209,11 @@ Write-Host ""
 Write-Host "Start watcher / 启动监听："
 Write-Host "  pathpilot watch"
 Write-Host ""
-Write-Host "Open GUI / 打开图形界面："
-Write-Host "  pathpilot ui"
-Write-Host ""
+if (-not $CliOnly) {
+    Write-Host "Open GUI / 打开图形界面："
+    Write-Host "  pathpilot ui"
+    Write-Host ""
+}
 Write-Host "Update PathPilot / 更新 PathPilot："
 Write-Host "  .\scripts\update.ps1"
 Write-Host ""

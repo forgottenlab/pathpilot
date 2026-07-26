@@ -284,6 +284,7 @@ def test_gui_command_preview_is_read_only_and_refresh_preserves_dirty_target(
     tmp_path: Path,
     runtime_paths: dict[str, str],
 ) -> None:
+    pytest.importorskip("PySide6.QtWidgets", reason="GUI extra is not installed")
     from PySide6.QtWidgets import QApplication
     from app.gui.install_page import InstallPage
 

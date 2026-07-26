@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  core:
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -13,33 +13,108 @@ jobs:
         python-version: ["3.12", "3.13"]
     env:
       QT_QPA_PLATFORM: offscreen
-      PATHPILOT_HOME: ${{ runner.temp }}\pathpilot-home
+      PATHPILOT_HOME: ${{ runner.temp }}\pathpilot-core-${{ matrix.python-version }}
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-
-      - name: Install project and pytest
-        run: |
-          python -m pip install -e .
-          python -m pip install "pytest>=8,<9"
-
-      - name: Run pytest in temporary state
+      - name: Install core and development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run tests
         run: >-
           python -m pytest -q -p no:cacheprovider
           --basetemp "${{ runner.temp }}\pytest-${{ matrix.python-version }}"
-
-      - name: Compile Python sources
-        run: python -m compileall -q app tests
-
-      - name: Verify CLI help
+      - name: Compile Python
+        run: python -m compileall -q app tests scripts/check_release_artifacts.py
+      - name: CLI and isolated diagnostics
+        shell: pwsh
         run: |
           pathpilot --help
           pathpilot installs --help
           pathpilot installs run --help
-
-      - name: Check whitespace
+          python -c "from app.core.paths import ensure_user_config_files; from app.core.settings import load_settings; ensure_user_config_files(); load_settings()"
+          pathpilot doctor
+          pathpilot test
+      - name: PowerShell AST
+        shell: pwsh
+        run: |
+          $errors = @()
+          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$parseErrors) | Out-Null
+            $errors += $parseErrors
+          }
+          if ($errors.Count) { $errors | ForEach-Object Message; exit 1 }
+      - name: Whitespace
         run: git diff --check HEAD
+
+  package:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PATHPILOT_HOME: ${{ runner.temp }}\pathpilot-package
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m build
+          python scripts/check_release_artifacts.py dist
+      - name: CLI-only wheel smoke
+        shell: pwsh
+        run: |
+          python -m venv "$env:RUNNER_TEMP\cli-smoke"
+          $python = "$env:RUNNER_TEMP\cli-smoke\Scripts\python.exe"
+          $pathpilot = "$env:RUNNER_TEMP\cli-smoke\Scripts\pathpilot.exe"
+          $wheel = (Get-ChildItem dist\*.whl).FullName
+          & $python -m pip install $wheel
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $python -c "import importlib.metadata as m, importlib.util; assert m.version('pathpilot') == '0.2.2'; assert importlib.util.find_spec('PySide6') is None; import app"
+          } finally {
+            Pop-Location
+          }
+          & $pathpilot --help
+          & $pathpilot status
+          & $python -c "from app.core.paths import ensure_user_config_files; from app.core.settings import load_settings; ensure_user_config_files(); load_settings()"
+          & $pathpilot doctor
+          & $pathpilot test
+          $uiOutput = & $pathpilot --lang en ui 2>&1
+          if ($LASTEXITCODE -eq 0 -or $uiOutput -match "Traceback" -or $uiOutput -notmatch "pathpilot\[gui\]") { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pathpilot-dist
+          path: dist/*
+
+  gui-smoke:
+    needs: package
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PATHPILOT_HOME: ${{ runner.temp }}\pathpilot-gui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: pathpilot-dist
+          path: dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install GUI extra and create window offscreen
+        shell: pwsh
+        run: |
+          $wheel = (Get-ChildItem dist\*.whl).FullName
+          python -m pip install "${wheel}[gui]" "pytest>=8,<9"
+          Push-Location $env:RUNNER_TEMP
+          try {
+            python -c "import importlib.metadata as m; assert m.version('pathpilot') == '0.2.2'; from app.gui.start_gui import create_main_window; app, window = create_main_window(); window.close(); app.quit(); print('GUI wheel smoke passed')"
+          } finally {
+            Pop-Location
+          }
+          python -m pytest -q -p no:cacheprovider tests\test_installer_security.py --basetemp "$env:RUNNER_TEMP\gui-pytest"

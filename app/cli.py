@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from app.core.i18n import (
     text,
     cell_text,
     title_text,
+    status_text,
+    message,
 )
 from app.core.path_policy import (
     PathPolicyError,
@@ -37,7 +40,14 @@ from app.core.path_policy import (
     validate_runtime_layout,
     validate_source_directory,
 )
-from app.core.json_store import JsonStoreError, atomic_write_json, ensure_json_file, read_json
+from app.core.json_store import (
+    JsonCorruptError,
+    JsonLockTimeout,
+    JsonStoreError,
+    atomic_write_json,
+    ensure_json_file,
+    read_json,
+)
 from app.core.paths import DEFAULT_SETTINGS, get_settings_path
 from app.core.settings import build_runtime_paths, load_rules, load_settings
 from app.diagnostics import run_doctor_report, run_self_test
@@ -116,7 +126,19 @@ def fail_path_policy(exc: PathPolicyError) -> None:
 
 
 def fail_json_store(exc: JsonStoreError) -> None:
-    error(text(f"状态文件错误: {exc}", f"State file error: {exc}"))
+    if isinstance(exc, JsonLockTimeout):
+        detail = text(
+            f"等待状态文件锁超时: {exc.path}",
+            f"Timed out waiting for the state-file lock: {exc.path}",
+        )
+    elif isinstance(exc, JsonCorruptError):
+        detail = text(
+            f"状态文件错误: JSON 状态损坏，原内容已保留: {exc.backup_path or exc.path}",
+            f"State file error: JSON state is corrupt; the original content was preserved: {exc.backup_path or exc.path}",
+        )
+    else:
+        detail = text(f"状态文件错误: {exc}", f"State file error: {exc}")
+    error(detail)
     raise typer.Exit(code=1) from exc
 
 
@@ -135,9 +157,8 @@ def callback(
 ) -> None:
     global GLOBAL_LANG_OVERRIDE
 
-    if lang:
-        GLOBAL_LANG_OVERRIDE = normalize_lang(lang)
-        set_lang(GLOBAL_LANG_OVERRIDE)
+    GLOBAL_LANG_OVERRIDE = normalize_lang(lang or "zh")
+    set_lang(GLOBAL_LANG_OVERRIDE)
 
     if version_flag:
         console.print(f"PathPilot {__version__}")
@@ -218,7 +239,10 @@ def status(
             ("Downloads", runtime["archive_root"]),
             ("Apps", runtime["apps_root"]),
             ("Incoming", runtime["incoming_root"]),
-            (cell_text("根目录选择原因", "Root Selection Reason", active_lang), runtime["root_selection_reason"]),
+            (
+                cell_text("根目录选择原因", "Root Selection Reason", active_lang),
+                message(f"root_reason_{runtime['root_selection_reason']}", active_lang),
+            ),
             (cell_text("待处理安装建议", "Pending Suggestions", active_lang), pending_count),
         ],
     )
@@ -268,13 +292,22 @@ def watch(
 
 @app.command()
 def ui() -> None:
-    from app.gui.start_gui import main as start_gui
+    if importlib.util.find_spec("PySide6") is None:
+        error(message("gui_extra_missing"))
+        raise typer.Exit(code=1)
+    try:
+        from app.gui.start_gui import main as start_gui
+    except ModuleNotFoundError as exc:
+        if exc.name and exc.name.startswith("PySide6"):
+            error(message("gui_extra_missing"))
+            raise typer.Exit(code=1) from None
+        raise
     start_gui()
 
 
 @config_app.command("show")
 def config_show() -> None:
-    banner("PathPilot Config", "settings.json")
+    banner("PathPilot Config", text("配置文件 settings.json", "Configuration file settings.json"))
     settings = load_settings_file()
     print_json_text(json.dumps(settings, ensure_ascii=False, indent=2))
 
@@ -299,10 +332,7 @@ def config_set_root(path: str) -> None:
         f"已设置 PathPilot 根目录: {settings['base_paths']['root_dir']}",
         f"PathPilot root set: {settings['base_paths']['root_dir']}",
     ))
-    warn(text(
-        "重启 PathPilot watcher 或重新打开 GUI 后生效。",
-        "Restart the PathPilot watcher or reopen the GUI to apply the change.",
-    ))
+    warn(message("restart_required"))
 
 
 @config_app.command("reset-root")
@@ -312,8 +342,8 @@ def config_reset_root() -> None:
     settings["base_paths"]["root_dir"] = ""
     save_settings_file(settings)
 
-    ok("已重置为自动选择根目录。")
-    warn("重启 PathPilot watcher 或重新打开 GUI 后生效。")
+    ok(text("已重置为自动选择根目录。", "Root auto-selection has been restored."))
+    warn(message("restart_required"))
 
 
 @sources_app.command("list")
@@ -321,12 +351,12 @@ def sources_list() -> None:
     settings = load_settings_file()
     watch_dirs = settings.get("watch_directories", [])
 
-    banner("PathPilot Sources", "监听来源目录")
+    banner("PathPilot Sources", text("监听来源目录", "Source directories"))
     if not watch_dirs:
-        warn("当前没有配置监听目录。")
+        warn(message("no_sources"))
         return
 
-    path_list("当前监听目录", watch_dirs)
+    path_list(text("当前监听目录", "Configured source directories"), watch_dirs)
 
 
 @sources_app.command("add")
@@ -353,7 +383,7 @@ def sources_add(path: str) -> None:
     save_settings_file(settings)
 
     ok(text(f"已添加监听目录: {final_path}", f"Source directory added: {final_path}"))
-    warn(text("重启 PathPilot watcher 后生效。", "Restart the PathPilot watcher to apply the change."))
+    warn(message("watcher_restart_required"))
 
 
 @sources_app.command("remove")
@@ -363,31 +393,33 @@ def sources_remove(path: str) -> None:
 
     target = path.replace("\\", "/")
     if target not in watch_dirs:
-        warn(f"未找到监听目录: {target}")
+        error(text(f"未找到监听目录: {target}", f"Source directory not found: {target}"))
+        raise typer.Exit(code=1)
         return
 
     watch_dirs.remove(target)
     save_settings_file(settings)
 
-    ok(f"已移除监听目录: {target}")
-    warn("重启 PathPilot watcher 后生效。")
+    ok(text(f"已移除监听目录: {target}", f"Source directory removed: {target}"))
+    warn(message("watcher_restart_required"))
 
 
 def render_installs_table(items: list[dict]) -> None:
+    active_lang = get_lang()
     table = Table(
-        title="安装建议",
+        title=title_text("安装建议", "Install Suggestions", active_lang),
         box=box.SQUARE,
         show_lines=True,
         expand=False,
         border_style="cyan",
     )
     table.add_column("ID", justify="right", style="magenta", width=4)
-    table.add_column("名称", style="cyan", min_width=14, overflow="fold")
-    table.add_column("来源", min_width=10)
-    table.add_column("家族", min_width=12)
-    table.add_column("模式", min_width=8)
-    table.add_column("状态", min_width=8)
-    table.add_column("目标目录", min_width=42, overflow="fold")
+    table.add_column(cell_text("名称", "Name", active_lang), style="cyan", min_width=14, overflow="fold")
+    table.add_column(cell_text("来源", "Source", active_lang), min_width=10)
+    table.add_column(cell_text("家族", "Family", active_lang), min_width=12)
+    table.add_column(cell_text("模式", "Mode", active_lang), min_width=8)
+    table.add_column(cell_text("状态", "Status", active_lang), min_width=8)
+    table.add_column(cell_text("目标目录", "Target", active_lang), min_width=42, overflow="fold")
 
     for item in items:
         mode = item.get("mode", "")
@@ -412,7 +444,7 @@ def render_installs_table(items: list[dict]) -> None:
             str(item.get("source", "")),
             str(item.get("installer_family", item.get("family", ""))),
             mode_text,
-            f"[{status_style}]{status}[/{status_style}]",
+            f"[{status_style}]{status_text(status, active_lang)}[/{status_style}]",
             str(item.get("target_dir", item.get("target", ""))),
         )
 
@@ -426,10 +458,10 @@ def installs_list(
     items_all = load_install_items_or_exit()
     items = items_all if all_items else [item for item in items_all if item.get("status") == "pending"]
 
-    banner("PathPilot Installs", "安装建议管理")
+    banner("PathPilot Installs", text("安装建议管理", "Install suggestion management"))
 
     if not items:
-        warn("当前没有符合条件的安装建议。")
+        warn(message("no_suggestions"))
         return
 
     render_installs_table(items)
@@ -441,25 +473,28 @@ def installs_detail(id: int) -> None:
     record = next((x for x in items if int(x["id"]) == int(id)), None)
 
     if not record:
-        error(f"未找到安装建议 #{id}")
+        error(text(f"未找到安装建议 #{id}", f"Install suggestion #{id} was not found."))
         raise typer.Exit(code=1)
 
     banner(f"Install Suggestion #{record['id']}", normalize_display_name(record["name"]))
 
     kv_table(
-        "详情",
+        title_text("详情", "Details"),
         [
-            ("名称", normalize_display_name(record.get("name", ""))),
-            ("来源", record.get("source", "")),
-            ("家族", record.get("installer_family", record.get("family", ""))),
-            ("模式", record.get("mode", "")),
-            ("状态", record.get("status", "")),
-            ("安装包", record.get("installer_path", record.get("installer", ""))),
-            ("目标目录", record.get("target_dir", record.get("target", ""))),
-            ("命令预览（仅展示）", record.get("preview", record.get("legacy_preview", ""))),
-            ("旧记录说明", record.get("legacy_reason", "")),
-            ("创建时间", record.get("created_at", "")),
-            ("更新时间", record.get("updated_at", "")),
+            (cell_text("名称", "Name"), normalize_display_name(record.get("name", ""))),
+            (cell_text("来源", "Source"), record.get("source", "")),
+            (cell_text("家族", "Family"), record.get("installer_family", record.get("family", ""))),
+            (cell_text("模式", "Mode"), record.get("mode", "")),
+            (cell_text("状态", "Status"), status_text(record.get("status", ""))),
+            (cell_text("安装包", "Installer"), record.get("installer_path", record.get("installer", ""))),
+            (cell_text("目标目录", "Target"), record.get("target_dir", record.get("target", ""))),
+            (cell_text("命令预览（仅展示）", "Command preview (display only)"), record.get("preview", record.get("legacy_preview", ""))),
+            (
+                cell_text("旧记录说明", "Legacy note"),
+                message("legacy_reason") if record.get("status") == "legacy_unsafe" else "",
+            ),
+            (cell_text("创建时间", "Created"), record.get("created_at", "")),
+            (cell_text("更新时间", "Updated"), record.get("updated_at", "")),
         ],
     )
 
@@ -478,7 +513,7 @@ def installs_run(
     record = next((x for x in items if int(x["id"]) == int(id)), None)
 
     if not record:
-        error(f"未找到安装建议 #{id}")
+        error(text(f"未找到安装建议 #{id}", f"Install suggestion #{id} was not found."))
         raise typer.Exit(code=1)
 
     if record.get("status") == "legacy_unsafe" or (
@@ -498,14 +533,8 @@ def installs_run(
         raise typer.Exit(code=1)
 
     if record.get("mode") == "suggest" and not force:
-        warn(text(
-            "当前建议为 suggest 模式，默认不执行。",
-            "This suggestion is in suggest mode and is not run by default.",
-        ))
-        info(text(
-            "确认要启动可添加 --force；安全校验仍不可绕过。",
-            "Add --force to confirm launch; core safety validation still cannot be bypassed.",
-        ))
+        warn(message("suggest_confirmation"))
+        info(message("force_safety"))
         raise typer.Exit(code=1)
 
     try:
@@ -560,10 +589,10 @@ def installs_skip(id: int) -> None:
     except JsonStoreError as exc:
         fail_json_store(exc)
     if not updated:
-        error(f"未找到安装建议 #{id}")
+        error(text(f"未找到安装建议 #{id}", f"Install suggestion #{id} was not found."))
         raise typer.Exit(code=1)
 
-    ok(f"安装建议 #{id} 已标记为 skipped。")
+    ok(text(f"安装建议 #{id} 已标记为 skipped。", f"Install suggestion #{id} was marked skipped."))
 
 
 @installs_app.command("open")
@@ -572,15 +601,15 @@ def installs_open(id: int) -> None:
     record = next((x for x in items if int(x["id"]) == int(id)), None)
 
     if not record:
-        error(f"未找到安装建议 #{id}")
+        error(text(f"未找到安装建议 #{id}", f"Install suggestion #{id} was not found."))
         raise typer.Exit(code=1)
 
     installer_path = Path(record.get("installer_path", record.get("installer", "")))
     if installer_path.exists():
         os.startfile(str(installer_path.parent))
-        ok(f"已打开安装包所在目录: {installer_path.parent}")
+        ok(text(f"已打开安装包所在目录: {installer_path.parent}", f"Opened installer directory: {installer_path.parent}"))
     else:
-        error(f"安装包不存在: {installer_path}")
+        error(text(f"安装包不存在: {installer_path}", f"Installer does not exist: {installer_path}"))
         raise typer.Exit(code=1)
 
 

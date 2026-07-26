@@ -1,6 +1,7 @@
 param(
     [switch]$Yes,
-    [switch]$RemoveUserShim
+    [switch]$RemoveUserShim,
+    [switch]$RemoveUserConfig
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,7 +66,7 @@ $PythonCommand = Resolve-PythonCommand
 if ($null -eq $PythonCommand) {
     Write-Host "Python was not found. Cannot run pipx uninstall." -ForegroundColor Yellow
     Write-Host "未找到 Python，无法执行 pipx 卸载。"
-    exit 0
+    exit 1
 }
 
 Write-Host "Python command / Python 命令: $PythonCommand" -ForegroundColor Green
@@ -85,13 +86,21 @@ else {
         }
     }
 
-    $originalLocation = Get-Location
-    try {
-        Set-Location $env:TEMP
-        Invoke-External $PythonCommand @("-m", "pipx", "uninstall", "pathpilot") -AllowFailure
+    $installedList = & $PythonCommand -m pipx list
+    if ($LASTEXITCODE -ne 0) {
+        throw "pipx list failed."
     }
-    finally {
-        Set-Location $originalLocation
+    if ($installedList -match "pathpilot") {
+        $originalLocation = Get-Location
+        try {
+            Set-Location $env:TEMP
+            Invoke-External $PythonCommand @("-m", "pipx", "uninstall", "pathpilot")
+        }
+        finally {
+            Set-Location $originalLocation
+        }
+    } else {
+        Write-Host "PathPilot is not installed in pipx / pipx 中未安装 PathPilot。" -ForegroundColor Yellow
     }
 
     Write-Host ""
@@ -114,6 +123,25 @@ if ($RemoveUserShim) {
     if (Test-Path $Shim) {
         Remove-Item $Shim -Force
         Write-Host "Removed user shim / 已移除用户 shim: $Shim" -ForegroundColor Green
+    }
+}
+
+if ($RemoveUserConfig) {
+    if (-not $Yes) {
+        $removeAnswer = Read-Host "Delete PathPilot user configuration and queue? / 删除 PathPilot 用户配置和队列？(y/N)"
+        if ($removeAnswer -notin @("y", "Y", "yes", "YES")) {
+            Write-Host "User configuration retained / 已保留用户配置。"
+            exit 0
+        }
+    }
+    $profileRoot = [System.IO.Path]::GetFullPath([Environment]::GetFolderPath("UserProfile"))
+    $userState = [System.IO.Path]::GetFullPath((Join-Path $profileRoot ".pathpilot"))
+    if ((Split-Path -Parent $userState) -ne $profileRoot -or (Split-Path -Leaf $userState) -ne ".pathpilot") {
+        throw "Refused unsafe user-state cleanup target: $userState"
+    }
+    if (Test-Path -LiteralPath $userState) {
+        Remove-Item -LiteralPath $userState -Recurse -Force
+        Write-Host "Removed PathPilot user state / 已删除 PathPilot 用户状态: $userState" -ForegroundColor Yellow
     }
 }
 

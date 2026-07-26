@@ -1,6 +1,6 @@
-watchdog==6.0.0
-psutil==7.0.0
-PySide6==6.8.2
+# Core CLI runtime dependencies only.
+# Install this project with [gui], [dev], or [all] for optional dependencies.
+watchdog>=6.0.0,<7
+psutil>=7.0.0,<8
 rich>=13.7.0
 typer>=0.12.0
-questionary>=2.0.0
