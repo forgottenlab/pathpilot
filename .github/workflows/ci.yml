@@ -32,14 +32,23 @@ jobs:
           --basetemp "${{ runner.temp }}\pytest-${{ matrix.python-version }}"
       - name: Compile Python
         run: python -m compileall -q app tests scripts/check_release_artifacts.py
-      - name: CLI and isolated diagnostics
+      - name: CLI help smoke
         shell: pwsh
         run: |
           pathpilot --help
           pathpilot installs --help
           pathpilot installs run --help
+      - name: Initialize isolated PathPilot state
+        shell: pwsh
+        run: |
           python -c "from app.core.paths import ensure_user_config_files; from app.core.settings import load_settings; ensure_user_config_files(); load_settings()"
+      - name: Read-only doctor
+        shell: pwsh
+        run: |
           pathpilot doctor
+      - name: Isolated behavior test
+        shell: pwsh
+        run: |
           pathpilot test
       - name: PowerShell AST
         shell: pwsh
@@ -73,27 +82,66 @@ jobs:
           python -m pip install -e ".[dev]"
           python -m build
           python scripts/check_release_artifacts.py dist
-      - name: CLI-only wheel smoke
+      - name: Create CLI-only smoke environment
         shell: pwsh
         run: |
-          python -m venv "$env:RUNNER_TEMP\cli-smoke"
-          $python = "$env:RUNNER_TEMP\cli-smoke\Scripts\python.exe"
-          $pathpilot = "$env:RUNNER_TEMP\cli-smoke\Scripts\pathpilot.exe"
+          $cliRoot = "$env:RUNNER_TEMP\cli-smoke"
+          python -m venv $cliRoot
+          "CLI_SMOKE_PYTHON=$cliRoot\Scripts\python.exe" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CLI_SMOKE_PATHPILOT=$cliRoot\Scripts\pathpilot.exe" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Install CLI-only wheel
+        shell: pwsh
+        run: |
           $wheel = (Get-ChildItem dist\*.whl).FullName
-          & $python -m pip install $wheel
+          & $env:CLI_SMOKE_PYTHON -m pip install $wheel
+      - name: Verify PySide6 is absent
+        shell: pwsh
+        run: |
           Push-Location $env:RUNNER_TEMP
           try {
-            & $python -c "import importlib.metadata as m, importlib.util; assert m.version('pathpilot') == '0.2.2'; assert importlib.util.find_spec('PySide6') is None; import app"
+            & $env:CLI_SMOKE_PYTHON -c "import importlib.metadata as m, importlib.util; assert m.version('pathpilot') == '0.2.2'; assert importlib.util.find_spec('PySide6') is None; import app"
           } finally {
             Pop-Location
           }
-          & $pathpilot --help
-          & $pathpilot status
-          & $python -c "from app.core.paths import ensure_user_config_files; from app.core.settings import load_settings; ensure_user_config_files(); load_settings()"
-          & $pathpilot doctor
-          & $pathpilot test
-          $uiOutput = & $pathpilot --lang en ui 2>&1
-          if ($LASTEXITCODE -eq 0 -or $uiOutput -match "Traceback" -or $uiOutput -notmatch "pathpilot\[gui\]") { exit 1 }
+      - name: CLI-only help and status
+        shell: pwsh
+        run: |
+          & $env:CLI_SMOKE_PATHPILOT --help
+          & $env:CLI_SMOKE_PATHPILOT status
+      - name: Initialize isolated CLI-only state
+        shell: pwsh
+        run: |
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $env:CLI_SMOKE_PYTHON -c "from app.core.paths import ensure_user_config_files; from app.core.settings import load_settings; ensure_user_config_files(); load_settings()"
+          } finally {
+            Pop-Location
+          }
+      - name: CLI-only doctor
+        shell: pwsh
+        run: |
+          & $env:CLI_SMOKE_PATHPILOT doctor
+      - name: CLI-only behavior test
+        shell: pwsh
+        run: |
+          & $env:CLI_SMOKE_PATHPILOT test
+      - name: Verify GUI extra missing message
+        shell: pwsh
+        run: |
+          $nativePreference = $PSNativeCommandUseErrorActionPreference
+          $PSNativeCommandUseErrorActionPreference = $false
+          try {
+            $uiOutput = & $env:CLI_SMOKE_PATHPILOT --lang en ui 2>&1
+            $uiExitCode = $LASTEXITCODE
+          } finally {
+            $PSNativeCommandUseErrorActionPreference = $nativePreference
+          }
+          $uiOutput | Write-Output
+          if ($uiExitCode -eq 0) { throw "CLI-only UI unexpectedly returned exit code 0." }
+          if ($uiOutput -match "Traceback") { throw "CLI-only UI emitted a traceback." }
+          if ($uiOutput -notmatch "pathpilot\[gui\]") { throw "CLI-only UI omitted the pathpilot[gui] install hint." }
       - uses: actions/upload-artifact@v4
         with:
           name: pathpilot-dist

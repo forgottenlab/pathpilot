@@ -179,7 +179,8 @@ def test_ci_has_core_package_and_gui_jobs() -> None:
         "python-version: [\"3.12\", \"3.13\"]",
         'python -m pip install -e ".[dev]"',
         "python -m build",
-        "CLI-only wheel smoke",
+        "Create CLI-only smoke environment",
+        "Install CLI-only wheel",
         "gui-smoke:",
         "QT_QPA_PLATFORM: offscreen",
         "PowerShell AST",
@@ -217,5 +218,52 @@ def test_ci_configures_isolated_home_at_runtime_for_each_job() -> None:
     core = _workflow_job_block(workflow, "core")
     assert 'python-version: ["3.12", "3.13"]' in core
     package = _workflow_job_block(workflow, "package")
-    assert "CLI-only wheel smoke" in package
+    assert "Create CLI-only smoke environment" in package
+    assert "Install CLI-only wheel" in package
     assert "gui-smoke:" in workflow
+
+
+def test_ci_runtime_checks_are_split_and_expected_ui_failure_is_captured() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    core = _workflow_job_block(workflow, "core")
+    core_steps = (
+        "CLI help smoke",
+        "Initialize isolated PathPilot state",
+        "Read-only doctor",
+        "Isolated behavior test",
+    )
+    core_positions = [core.index(f"- name: {name}") for name in core_steps]
+    assert core_positions == sorted(core_positions)
+    assert core.index("ensure_user_config_files(); load_settings()") < core.index(
+        "pathpilot doctor"
+    )
+
+    package = _workflow_job_block(workflow, "package")
+    package_steps = (
+        "Create CLI-only smoke environment",
+        "Install CLI-only wheel",
+        "Verify PySide6 is absent",
+        "CLI-only help and status",
+        "Initialize isolated CLI-only state",
+        "CLI-only doctor",
+        "CLI-only behavior test",
+        "Verify GUI extra missing message",
+    )
+    package_positions = [package.index(f"- name: {name}") for name in package_steps]
+    assert package_positions == sorted(package_positions)
+    assert package.index("ensure_user_config_files(); load_settings()") < package.index(
+        "CLI_SMOKE_PATHPILOT doctor"
+    )
+    assert "$PSNativeCommandUseErrorActionPreference = $false" in package
+    assert "$uiExitCode = $LASTEXITCODE" in package
+    assert "$uiExitCode -eq 0" in package
+    assert 'notmatch "pathpilot\\[gui\\]"' in package
+    assert 'match "Traceback"' in package
+
+    assert 'python-version: ["3.12", "3.13"]' in core
+    assert "QT_QPA_PLATFORM: offscreen" in core
+    assert "QT_QPA_PLATFORM: offscreen" in package
+    assert "gui-smoke:" in workflow
+    assert "Install GUI extra and create window offscreen" in workflow
+    assert "C:\\Users\\" not in workflow
+    assert "token" not in workflow.lower()
