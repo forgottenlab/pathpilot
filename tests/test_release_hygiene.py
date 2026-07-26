@@ -295,6 +295,7 @@ def test_ci_configures_isolated_home_at_runtime_for_each_job() -> None:
         operation_at = block.index(first_operation)
 
         assert "QT_QPA_PLATFORM: offscreen" in block
+        assert 'PYTHONUTF8: "1"' in block
         assert f"$env:RUNNER_TEMP\\{home_suffix}" in block
         assert "Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append" in block
         assert configure_at < checkout_at < operation_at
@@ -348,6 +349,8 @@ def test_ci_runtime_checks_are_split_and_expected_ui_failure_is_captured() -> No
     assert 'python-version: ["3.12", "3.13"]' in core
     assert "QT_QPA_PLATFORM: offscreen" in core
     assert "QT_QPA_PLATFORM: offscreen" in package
+    assert 'PYTHONUTF8: "1"' in core
+    assert 'PYTHONUTF8: "1"' in package
     assert "gui-smoke:" in workflow
     assert "Install GUI extra and create window offscreen" in workflow
     assert "C:\\Users\\" not in workflow
