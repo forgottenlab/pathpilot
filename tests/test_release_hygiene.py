@@ -340,9 +340,10 @@ def test_ci_runtime_checks_are_split_and_expected_ui_failure_is_captured() -> No
     )
     assert "$PSNativeCommandUseErrorActionPreference = $false" in package
     assert "$uiExitCode = $LASTEXITCODE" in package
+    assert "$uiText = $uiOutput | Out-String" in package
     assert "$uiExitCode -eq 0" in package
-    assert 'notmatch "pathpilot\\[gui\\]"' in package
-    assert 'match "Traceback"' in package
+    assert '$uiText -notmatch "pathpilot\\[gui\\]"' in package
+    assert '$uiText -match "Traceback"' in package
 
     assert 'python-version: ["3.12", "3.13"]' in core
     assert "QT_QPA_PLATFORM: offscreen" in core
