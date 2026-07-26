@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Any
@@ -8,20 +7,31 @@ from typing import Any
 import psutil
 
 from app.core.path_policy import normalize_path, validate_runtime_layout
-from app.core.paths import CONFIG_DIR, ensure_user_config_files
+from app.core.json_store import ensure_json_file, read_json, read_json_snapshot
+from app.core.paths import (
+    DEFAULT_RULES,
+    DEFAULT_SETTINGS,
+    get_config_dir,
+)
 
 
-def load_json(filename: str) -> dict[str, Any]:
-    ensure_user_config_files()
-    path = CONFIG_DIR / filename
+JSON_DEFAULTS = {
+    "settings.json": DEFAULT_SETTINGS,
+    "rules.json": DEFAULT_RULES,
+}
 
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
 
-    if not isinstance(data, dict):
-        return {}
-
-    return data
+def load_json(
+    filename: str,
+    *,
+    create_missing: bool = True,
+    readonly: bool = False,
+) -> dict[str, Any]:
+    path = get_config_dir() / filename
+    if create_missing:
+        ensure_json_file(path, JSON_DEFAULTS[filename], expected_type=dict)
+    loader = read_json_snapshot if readonly else read_json
+    return loader(path, expected_type=dict)
 
 
 def is_fixed_drive(partition: psutil._common.sdiskpart) -> bool:
@@ -69,6 +79,11 @@ def detect_best_root_dir() -> tuple[str, list[tuple[str, int]], str]:
 
 def build_runtime_paths(settings: dict[str, Any]) -> dict[str, Any]:
     base_paths = settings.setdefault("base_paths", {})
+    isolated_home_value = os.environ.get("PATHPILOT_HOME")
+    isolated_runtime = None
+    if isolated_home_value:
+        state_home = Path(isolated_home_value).resolve()
+        isolated_runtime = state_home.with_name(f"{state_home.name}-runtime")
 
     configured_root_dir = (base_paths.get("root_dir") or "").strip()
     if configured_root_dir:
@@ -76,6 +91,11 @@ def build_runtime_paths(settings: dict[str, Any]) -> dict[str, Any]:
         candidates: list[tuple[str, int]] = []
         system_drive = get_system_drive()
         root_selection_reason = "使用用户自定义根目录"
+    elif isolated_runtime is not None:
+        root_dir = str(isolated_runtime / "managed").replace("\\", "/")
+        candidates = []
+        system_drive = get_system_drive()
+        root_selection_reason = "PATHPILOT_HOME 隔离运行时根目录"
     else:
         root_dir, candidates, system_drive = detect_best_root_dir()
         if candidates:
@@ -88,9 +108,14 @@ def build_runtime_paths(settings: dict[str, Any]) -> dict[str, Any]:
     data_root = f"{root_dir}/Data"
     incoming_root = f"{archive_root}/00-Incoming"
 
+    effective_user_home = (
+        isolated_runtime / "user-home"
+        if isolated_runtime is not None
+        else Path.home()
+    )
     return {
-        "user_home": str(Path.home()).replace("\\", "/"),
-        "user_downloads": str((Path.home() / "Downloads")).replace("\\", "/"),
+        "user_home": str(effective_user_home).replace("\\", "/"),
+        "user_downloads": str((effective_user_home / "Downloads")).replace("\\", "/"),
         "root_dir": root_dir,
         "archive_root": archive_root,
         "apps_root": apps_root,
@@ -142,8 +167,17 @@ def ensure_runtime_directories(runtime_paths: dict[str, Any]) -> None:
         Path(dir_str).mkdir(parents=True, exist_ok=True)
 
 
-def load_settings() -> dict[str, Any]:
-    settings = load_json("settings.json")
+def load_settings(
+    *,
+    create_missing: bool = True,
+    create_runtime_dirs: bool = True,
+    readonly: bool = False,
+) -> dict[str, Any]:
+    settings = load_json(
+        "settings.json",
+        create_missing=create_missing,
+        readonly=readonly,
+    )
 
     settings.setdefault("watch_directories", ["{user_downloads}"])
     settings.setdefault("base_paths", {})
@@ -173,12 +207,13 @@ def load_settings() -> dict[str, Any]:
 
     settings["watch_directories"] = resolved_watch_dirs
 
-    ensure_runtime_directories(runtime_paths)
+    if create_runtime_dirs:
+        ensure_runtime_directories(runtime_paths)
     return settings
 
 
-def load_rules() -> dict[str, Any]:
-    rules = load_json("rules.json")
+def load_rules(*, create_missing: bool = True, readonly: bool = False) -> dict[str, Any]:
+    rules = load_json("rules.json", create_missing=create_missing, readonly=readonly)
     rules.setdefault("rules", [])
     rules.setdefault("fallback_target", "{archive_root}/99-Others")
     return rules

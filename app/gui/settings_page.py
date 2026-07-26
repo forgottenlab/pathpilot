@@ -11,8 +11,9 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.ui_helpers import load_json_file, save_json_file
+from app.core.json_store import JsonStoreError, ensure_json_file
 from app.core.path_policy import PathPolicyError, normalize_path, validate_runtime_layout
-from app.core.paths import CONFIG_DIR, ensure_user_config_files
+from app.core.paths import DEFAULT_SETTINGS, get_settings_path
 from app.core.settings import build_runtime_paths
 
 
@@ -20,8 +21,11 @@ class SettingsPage(QWidget):
     def __init__(self) -> None:
         super().__init__()
 
-        ensure_user_config_files()
-        self.settings_path = CONFIG_DIR / "settings.json"
+        self.settings_path = get_settings_path()
+        try:
+            ensure_json_file(self.settings_path, DEFAULT_SETTINGS, expected_type=dict)
+        except JsonStoreError:
+            pass
 
         self._build_ui()
         self.load_current_settings()
@@ -76,8 +80,12 @@ class SettingsPage(QWidget):
         """)
 
     def load_current_settings(self) -> None:
-        ensure_user_config_files()
-        settings = load_json_file(self.settings_path)
+        try:
+            ensure_json_file(self.settings_path, DEFAULT_SETTINGS, expected_type=dict)
+            settings = load_json_file(self.settings_path)
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "配置文件错误", str(exc))
+            return
 
         base_paths = settings.get("base_paths", {})
         watch_dirs = settings.get("watch_directories", [])
@@ -93,8 +101,12 @@ class SettingsPage(QWidget):
             self.root_dir_edit.setText(chosen.replace("\\", "/"))
 
     def save_settings(self) -> None:
-        ensure_user_config_files()
-        settings = load_json_file(self.settings_path)
+        try:
+            ensure_json_file(self.settings_path, DEFAULT_SETTINGS, expected_type=dict)
+            settings = load_json_file(self.settings_path)
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "配置文件错误", str(exc))
+            return
 
         if not isinstance(settings, dict):
             settings = {}
@@ -137,7 +149,11 @@ class SettingsPage(QWidget):
             for original, validated in zip(watch_dirs, validated_sources)
         ]
 
-        save_json_file(self.settings_path, settings)
+        try:
+            save_json_file(self.settings_path, settings)
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "保存失败", str(exc))
+            return
 
         QMessageBox.information(
             self,

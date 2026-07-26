@@ -215,6 +215,14 @@ pathpilot test
 pathpilot status
 ```
 
+`pathpilot doctor` is read-only: it reports missing or corrupt JSON state but
+does not create directories or rewrite configuration. `pathpilot test` runs an
+isolated behavior check under temporary `PATHPILOT_HOME` and managed roots.
+
+For development and automation, setting `PATHPILOT_HOME` isolates configuration,
+data, logs, the pending installer queue, and default runtime paths from the real
+user profile.
+
 如果全部正常，可以启动监听：
 
 ```powershell
@@ -365,6 +373,10 @@ PathPilot/
 ```powershell
 .\scripts\full_check.ps1 -SkipWatcher
 ```
+
+`full_check.ps1` always uses a unique temporary `PATHPILOT_HOME`, source, and
+managed root. Its watcher fixture files are inert and the script never launches
+an installer.
 
 ---
 

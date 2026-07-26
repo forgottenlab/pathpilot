@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-from app.core.paths import get_installer_rules_path, ensure_user_config_files
+from app.core.json_store import ensure_json_file, read_json
+from app.core.paths import DEFAULT_INSTALLER_RULES, get_installer_rules_path
 
 
 def load_installer_rules() -> dict[str, Any]:
-    ensure_user_config_files()
     path = get_installer_rules_path()
+    ensure_json_file(path, DEFAULT_INSTALLER_RULES, expected_type=dict)
 
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if not isinstance(data, dict):
-        return {}
+    data = read_json(path, expected_type=dict)
 
     data.setdefault("known_apps", [])
     data.setdefault("installer_families", [])

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.path_policy import PathPolicyError, validate_install_target
+from app.core.json_store import JsonStoreError
 from app.core.settings import load_settings
 from app.installers.queue import (
     load_pending_installs,
@@ -175,10 +176,16 @@ class InstallPage(QWidget):
         self.refresh_table(keep_id=current_id, silent=True)
 
     def refresh_table(self, keep_id: int | None = None, silent: bool = False) -> None:
-        items = [
-            item for item in load_pending_installs()
-            if item.get("status") in {"pending", "legacy_unsafe"}
-        ]
+        try:
+            items = [
+                item for item in load_pending_installs()
+                if item.get("status") in {"pending", "legacy_unsafe"}
+            ]
+        except JsonStoreError as exc:
+            self.summary_label.setText("安装建议队列损坏或被锁定")
+            if not silent:
+                QMessageBox.critical(self, "安装建议队列错误", str(exc))
+            return
         self.summary_label.setText(f"待处理安装建议：{len(items)}")
         preserve_dirty = bool(silent and self._target_dirty and self.current_record)
         preserved_id = int(self.current_record["id"]) if preserve_dirty else None
@@ -343,7 +350,11 @@ class InstallPage(QWidget):
             if answer != QMessageBox.Yes:
                 return
 
-        items = load_pending_installs()
+        try:
+            items = load_pending_installs()
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "安装建议队列错误", str(exc))
+            return
         target_id = int(self.current_record["id"])
         record = next((x for x in items if int(x["id"]) == target_id), None)
         if not record:
@@ -367,13 +378,20 @@ class InstallPage(QWidget):
         except PathPolicyError as exc:
             QMessageBox.warning(self, "路径不安全", exc.localized("zh"))
             return
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "配置文件错误", str(exc))
+            return
 
-        ok = run_install_record(
-            record,
-            apps_root=apps_root,
-            installers_root=installers_root,
-            target_dir=target,
-        )
+        try:
+            ok = run_install_record(
+                record,
+                apps_root=apps_root,
+                installers_root=installers_root,
+                target_dir=target,
+            )
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "安装建议队列错误", str(exc))
+            return
         if ok:
             self._target_dirty = False
             QMessageBox.information(self, "已启动", "安装器进程已启动；这不代表安装成功。")
@@ -385,7 +403,11 @@ class InstallPage(QWidget):
         if not self.current_record:
             return
 
-        update_install_suggestion_status(int(self.current_record["id"]), "skipped")
+        try:
+            update_install_suggestion_status(int(self.current_record["id"]), "skipped")
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "安装建议队列错误", str(exc))
+            return
         QMessageBox.information(self, "完成", "已跳过该安装建议。")
         self.refresh_table()
 

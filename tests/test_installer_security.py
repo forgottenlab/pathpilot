@@ -263,9 +263,6 @@ def test_force_cannot_bypass_install_target_policy(
 ) -> None:
     record = add_install_suggestion(_make_suggestion(tmp_path, runtime_paths))
     import app.cli as cli
-    import app.core.paths as paths
-
-    cli.SETTINGS_FILE = paths.CONFIG_DIR / "settings.json"
     cli.save_settings_file({
         "watch_directories": [runtime_paths["user_downloads"]],
         "base_paths": {"root_dir": runtime_paths["root_dir"]},

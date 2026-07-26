@@ -37,7 +37,8 @@ from app.core.path_policy import (
     validate_runtime_layout,
     validate_source_directory,
 )
-from app.core.paths import CONFIG_DIR, ensure_user_config_files
+from app.core.json_store import JsonStoreError, atomic_write_json, ensure_json_file, read_json
+from app.core.paths import DEFAULT_SETTINGS, get_settings_path
 from app.core.settings import build_runtime_paths, load_rules, load_settings
 from app.diagnostics import run_doctor_report, run_self_test
 from app.files.watcher import start_watching
@@ -50,8 +51,6 @@ from app.installers.queue import (
 from app.installers.runner import run_install_record
 from app.installers.strategy import rebuild_execution_fields
 
-
-SETTINGS_FILE = CONFIG_DIR / "settings.json"
 
 app = typer.Typer(
     name="pathpilot",
@@ -93,19 +92,18 @@ def apply_language(command_lang: str | None = None) -> str:
 
 
 def load_settings_file() -> dict:
-    ensure_user_config_files()
-    if not SETTINGS_FILE.exists():
-        return {}
-    with SETTINGS_FILE.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data if isinstance(data, dict) else {}
+    try:
+        ensure_json_file(get_settings_path(), DEFAULT_SETTINGS, expected_type=dict)
+        return read_json(get_settings_path(), expected_type=dict)
+    except JsonStoreError as exc:
+        fail_json_store(exc)
 
 
 def save_settings_file(settings: dict) -> None:
-    ensure_user_config_files()
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with SETTINGS_FILE.open("w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=2)
+    try:
+        atomic_write_json(get_settings_path(), settings)
+    except JsonStoreError as exc:
+        fail_json_store(exc)
 
 
 def format_gb(num_bytes: int) -> str:
@@ -115,6 +113,18 @@ def format_gb(num_bytes: int) -> str:
 def fail_path_policy(exc: PathPolicyError) -> None:
     error(exc.localized(get_lang()))
     raise typer.Exit(code=1)
+
+
+def fail_json_store(exc: JsonStoreError) -> None:
+    error(text(f"状态文件错误: {exc}", f"State file error: {exc}"))
+    raise typer.Exit(code=1) from exc
+
+
+def load_install_items_or_exit() -> list[dict]:
+    try:
+        return load_pending_installs()
+    except JsonStoreError as exc:
+        fail_json_store(exc)
 
 
 @app.callback(invoke_without_command=True)
@@ -188,9 +198,12 @@ def status(
     lang: str | None = typer.Option(None, "--lang", "-l", help="Language: zh / en / bi"),
 ) -> None:
     active_lang = apply_language(lang)
-    settings = load_settings()
-    runtime = settings["runtime_paths"]
-    pending_count = len(get_pending_items())
+    try:
+        settings = load_settings()
+        runtime = settings["runtime_paths"]
+        pending_count = len(get_pending_items())
+    except JsonStoreError as exc:
+        fail_json_store(exc)
 
     banner(
         "PathPilot",
@@ -238,6 +251,8 @@ def watch(
         rules = load_rules()
     except PathPolicyError as exc:
         fail_path_policy(exc)
+    except JsonStoreError as exc:
+        fail_json_store(exc)
 
     banner("PathPilot Watcher", text("开始监听下载入口目录", "Start watching source directories", active_lang))
     path_list(title_text("监听目录", "Source Directories", active_lang), settings.get("watch_directories", []))
@@ -247,6 +262,8 @@ def watch(
         start_watching(settings, rules)
     except PathPolicyError as exc:
         fail_path_policy(exc)
+    except JsonStoreError as exc:
+        fail_json_store(exc)
 
 
 @app.command()
@@ -257,7 +274,6 @@ def ui() -> None:
 
 @config_app.command("show")
 def config_show() -> None:
-    ensure_user_config_files()
     banner("PathPilot Config", "settings.json")
     settings = load_settings_file()
     print_json_text(json.dumps(settings, ensure_ascii=False, indent=2))
@@ -407,7 +423,7 @@ def render_installs_table(items: list[dict]) -> None:
 def installs_list(
     all_items: bool = typer.Option(False, "--all", help="Show all suggestions, not only pending."),
 ) -> None:
-    items_all = load_pending_installs()
+    items_all = load_install_items_or_exit()
     items = items_all if all_items else [item for item in items_all if item.get("status") == "pending"]
 
     banner("PathPilot Installs", "安装建议管理")
@@ -421,7 +437,7 @@ def installs_list(
 
 @installs_app.command("detail")
 def installs_detail(id: int) -> None:
-    items = load_pending_installs()
+    items = load_install_items_or_exit()
     record = next((x for x in items if int(x["id"]) == int(id)), None)
 
     if not record:
@@ -458,7 +474,7 @@ def installs_run(
         help="Confirm suggest-mode launch; core safety checks remain enforced.",
     ),
 ) -> None:
-    items = load_pending_installs()
+    items = load_install_items_or_exit()
     record = next((x for x in items if int(x["id"]) == int(id)), None)
 
     if not record:
@@ -506,6 +522,8 @@ def installs_run(
         preview = rebuild_execution_fields(record, final_target)["preview"]
     except PathPolicyError as exc:
         fail_path_policy(exc)
+    except JsonStoreError as exc:
+        fail_json_store(exc)
     except (KeyError, TypeError, ValueError) as exc:
         error(text(f"安装建议结构无效: {exc}", f"Invalid install suggestion structure: {exc}"))
         raise typer.Exit(code=1) from exc
@@ -516,12 +534,15 @@ def installs_run(
     ))
     info(text(f"命令预览（仅展示）: {preview}", f"Command preview (display only): {preview}"))
 
-    result = run_install_record(
-        record,
-        apps_root=apps_root,
-        installers_root=installers_root,
-        target_dir=final_target,
-    )
+    try:
+        result = run_install_record(
+            record,
+            apps_root=apps_root,
+            installers_root=installers_root,
+            target_dir=final_target,
+        )
+    except JsonStoreError as exc:
+        fail_json_store(exc)
     if result:
         ok(text(
             f"安装建议 #{id} 的进程已启动；这不代表安装成功。",
@@ -534,7 +555,10 @@ def installs_run(
 
 @installs_app.command("skip")
 def installs_skip(id: int) -> None:
-    updated = update_install_suggestion_status(int(id), "skipped")
+    try:
+        updated = update_install_suggestion_status(int(id), "skipped")
+    except JsonStoreError as exc:
+        fail_json_store(exc)
     if not updated:
         error(f"未找到安装建议 #{id}")
         raise typer.Exit(code=1)
@@ -544,7 +568,7 @@ def installs_skip(id: int) -> None:
 
 @installs_app.command("open")
 def installs_open(id: int) -> None:
-    items = load_pending_installs()
+    items = load_install_items_or_exit()
     record = next((x for x in items if int(x["id"]) == int(id)), None)
 
     if not record:
