@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
+
+from app.core.json_store import atomic_write_json, read_json
 
 
 def open_in_explorer(path_str: str) -> None:
@@ -33,12 +34,8 @@ def load_json_file(path: str | Path) -> dict:
     path = Path(path)
     if not path.exists():
         return {}
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    return read_json(path, expected_type=dict)
 
 
 def save_json_file(path: str | Path, data: dict) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    atomic_write_json(path, data)

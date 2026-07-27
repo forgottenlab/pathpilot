@@ -1,26 +1,37 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Any
 
 import psutil
 
-from app.core.paths import CONFIG_DIR, ensure_user_config_files
+from app.core.path_policy import normalize_path, validate_runtime_layout
+from app.core.json_store import ensure_json_file, read_json, read_json_snapshot
+from app.core.paths import (
+    DEFAULT_RULES,
+    DEFAULT_SETTINGS,
+    get_config_dir,
+)
 
 
-def load_json(filename: str) -> dict[str, Any]:
-    ensure_user_config_files()
-    path = CONFIG_DIR / filename
+JSON_DEFAULTS = {
+    "settings.json": DEFAULT_SETTINGS,
+    "rules.json": DEFAULT_RULES,
+}
 
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
 
-    if not isinstance(data, dict):
-        return {}
-
-    return data
+def load_json(
+    filename: str,
+    *,
+    create_missing: bool = True,
+    readonly: bool = False,
+) -> dict[str, Any]:
+    path = get_config_dir() / filename
+    if create_missing:
+        ensure_json_file(path, JSON_DEFAULTS[filename], expected_type=dict)
+    loader = read_json_snapshot if readonly else read_json
+    return loader(path, expected_type=dict)
 
 
 def is_fixed_drive(partition: psutil._common.sdiskpart) -> bool:
@@ -68,28 +79,43 @@ def detect_best_root_dir() -> tuple[str, list[tuple[str, int]], str]:
 
 def build_runtime_paths(settings: dict[str, Any]) -> dict[str, Any]:
     base_paths = settings.setdefault("base_paths", {})
+    isolated_home_value = os.environ.get("PATHPILOT_HOME")
+    isolated_runtime = None
+    if isolated_home_value:
+        state_home = Path(isolated_home_value).resolve()
+        isolated_runtime = state_home.with_name(f"{state_home.name}-runtime")
 
     configured_root_dir = (base_paths.get("root_dir") or "").strip()
     if configured_root_dir:
         root_dir = configured_root_dir.replace("\\", "/")
         candidates: list[tuple[str, int]] = []
         system_drive = get_system_drive()
-        root_selection_reason = "使用用户自定义根目录"
+        root_selection_reason = "custom"
+    elif isolated_runtime is not None:
+        root_dir = str(isolated_runtime / "managed").replace("\\", "/")
+        candidates = []
+        system_drive = get_system_drive()
+        root_selection_reason = "isolated"
     else:
         root_dir, candidates, system_drive = detect_best_root_dir()
         if candidates:
-            root_selection_reason = "自动选择非系统盘中剩余空间最大的盘"
+            root_selection_reason = "non_system"
         else:
-            root_selection_reason = "未找到合适的非系统盘，退回系统盘"
+            root_selection_reason = "system_fallback"
 
     archive_root = f"{root_dir}/Downloads"
     apps_root = f"{root_dir}/Apps"
     data_root = f"{root_dir}/Data"
     incoming_root = f"{archive_root}/00-Incoming"
 
+    effective_user_home = (
+        isolated_runtime / "user-home"
+        if isolated_runtime is not None
+        else Path.home()
+    )
     return {
-        "user_home": str(Path.home()).replace("\\", "/"),
-        "user_downloads": str((Path.home() / "Downloads")).replace("\\", "/"),
+        "user_home": str(effective_user_home).replace("\\", "/"),
+        "user_downloads": str((effective_user_home / "Downloads")).replace("\\", "/"),
         "root_dir": root_dir,
         "archive_root": archive_root,
         "apps_root": apps_root,
@@ -141,8 +167,17 @@ def ensure_runtime_directories(runtime_paths: dict[str, Any]) -> None:
         Path(dir_str).mkdir(parents=True, exist_ok=True)
 
 
-def load_settings() -> dict[str, Any]:
-    settings = load_json("settings.json")
+def load_settings(
+    *,
+    create_missing: bool = True,
+    create_runtime_dirs: bool = True,
+    readonly: bool = False,
+) -> dict[str, Any]:
+    settings = load_json(
+        "settings.json",
+        create_missing=create_missing,
+        readonly=readonly,
+    )
 
     settings.setdefault("watch_directories", ["{user_downloads}"])
     settings.setdefault("base_paths", {})
@@ -156,12 +191,14 @@ def load_settings() -> dict[str, Any]:
     behavior.setdefault("overwrite_strategy", "rename")
 
     runtime_paths = build_runtime_paths(settings)
+    resolved_external_sources = validate_runtime_layout(settings, runtime_paths)
+    for key in ("root_dir", "archive_root", "apps_root", "data_root", "incoming_root"):
+        runtime_paths[key] = str(normalize_path(runtime_paths[key])).replace("\\", "/")
     settings["runtime_paths"] = runtime_paths
 
-    configured_watch_dirs = settings.get("watch_directories", ["{user_downloads}"])
     resolved_watch_dirs = [
-        resolve_template(path, runtime_paths).replace("\\", "/")
-        for path in configured_watch_dirs
+        str(path).replace("\\", "/")
+        for path in resolved_external_sources
     ]
 
     incoming_root = runtime_paths["incoming_root"]
@@ -170,12 +207,13 @@ def load_settings() -> dict[str, Any]:
 
     settings["watch_directories"] = resolved_watch_dirs
 
-    ensure_runtime_directories(runtime_paths)
+    if create_runtime_dirs:
+        ensure_runtime_directories(runtime_paths)
     return settings
 
 
-def load_rules() -> dict[str, Any]:
-    rules = load_json("rules.json")
+def load_rules(*, create_missing: bool = True, readonly: bool = False) -> dict[str, Any]:
+    rules = load_json("rules.json", create_missing=create_missing, readonly=readonly)
     rules.setdefault("rules", [])
     rules.setdefault("fallback_target", "{archive_root}/99-Others")
     return rules

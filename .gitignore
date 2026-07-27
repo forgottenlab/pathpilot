@@ -26,6 +26,7 @@ backups/
 # Test / temp
 *.tmp
 *.log
+.packaging-tmp/
 
 # IDE
 .idea/

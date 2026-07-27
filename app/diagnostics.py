@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 from rich import box
@@ -9,31 +11,29 @@ from rich.panel import Panel
 from rich.table import Table
 
 from app.core.console import console
-from app.core.i18n import text, cell_text, title_text, status_text
+from app.core.i18n import cell_text, status_text, text, title_text
+from app.core.json_store import (
+    JsonStoreError,
+    atomic_write_json,
+    inspect_json,
+    read_json_snapshot,
+)
 from app.core.paths import (
-    APP_HOME,
-    CONFIG_DIR,
-    DATA_DIR,
-    LOG_DIR,
     ensure_user_config_files,
+    get_app_home,
+    get_config_dir,
+    get_data_dir,
     get_installer_rules_path,
     get_pending_installs_path,
     get_rules_path,
     get_settings_path,
 )
 from app.core.settings import load_rules, load_settings
-from app.installers.queue import load_pending_installs
+from app.files.watcher import DownloadEventHandler
 
 
-def _path_writable(path: Path) -> bool:
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        test_file = path / ".pathpilot_write_test.tmp"
-        test_file.write_text("ok", encoding="utf-8")
-        test_file.unlink(missing_ok=True)
-        return True
-    except Exception:
-        return False
+def _path_writable_readonly(path: Path) -> bool:
+    return path.exists() and path.is_dir() and os.access(path, os.W_OK)
 
 
 def _add_result(
@@ -55,17 +55,20 @@ def _add_result(
 
 
 def run_doctor_report(lang: str = "zh") -> bool:
-    ensure_user_config_files()
+    """Inspect current state without creating, rewriting, or locking any file."""
+    app_home = get_app_home()
+    config_dir = get_config_dir()
+    data_dir = get_data_dir()
     passed_all = True
 
     console.print(
         Panel(
             text(
-                f"用户目录：{APP_HOME}\n配置目录：{CONFIG_DIR}\n数据目录：{DATA_DIR}",
-                f"App home: {APP_HOME}\nConfig dir: {CONFIG_DIR}\nData dir: {DATA_DIR}",
+                f"用户目录：{app_home}\n配置目录：{config_dir}\n数据目录：{data_dir}",
+                f"App home: {app_home}\nConfig dir: {config_dir}\nData dir: {data_dir}",
                 lang,
             ),
-            title=title_text("PathPilot 诊断", "PathPilot Doctor", lang),
+            title=title_text("PathPilot 诊断（只读）", "PathPilot Doctor (read-only)", lang),
             border_style="cyan",
             box=box.SQUARE,
         )
@@ -75,7 +78,6 @@ def run_doctor_report(lang: str = "zh") -> bool:
         title=title_text("诊断结果", "Doctor Results", lang),
         box=box.SQUARE,
         show_lines=True,
-        expand=False,
         border_style="cyan",
     )
     table.add_column("No.", style="magenta", width=4, justify="right")
@@ -84,79 +86,83 @@ def run_doctor_report(lang: str = "zh") -> bool:
     table.add_column(cell_text("说明", "Detail", lang), min_width=42, overflow="fold")
 
     checks: list[tuple[str, str, bool, str, str]] = []
+    checks.append((
+        "用户配置目录",
+        "User config directory",
+        config_dir.exists(),
+        f"配置目录：{config_dir}",
+        f"Config dir: {config_dir}",
+    ))
 
-    settings_path = get_settings_path()
-    rules_path = get_rules_path()
-    installer_rules_path = get_installer_rules_path()
-    pending_path = get_pending_installs_path()
-
-    checks.append(("用户配置目录", "User config directory", CONFIG_DIR.exists(), f"配置目录：{CONFIG_DIR}", f"Config dir: {CONFIG_DIR}"))
-    checks.append(("settings.json", "settings.json", settings_path.exists(), f"配置文件：{settings_path}", f"Settings file: {settings_path}"))
-    checks.append(("rules.json", "rules.json", rules_path.exists(), f"分类规则：{rules_path}", f"Rules file: {rules_path}"))
-    checks.append(("installer_rules.json", "installer_rules.json", installer_rules_path.exists(), f"安装器规则：{installer_rules_path}", f"Installer rules: {installer_rules_path}"))
-    checks.append(("pending_installs.json", "pending_installs.json", pending_path.exists(), f"安装建议队列：{pending_path}", f"Install queue: {pending_path}"))
+    json_specs = (
+        ("settings.json", get_settings_path(), dict),
+        ("rules.json", get_rules_path(), dict),
+        ("installer_rules.json", get_installer_rules_path(), dict),
+        ("pending_installs.json", get_pending_installs_path(), list),
+    )
+    for name, path, expected in json_specs:
+        state = inspect_json(path, expected_type=expected)
+        detail = str(path) if state.valid else f"{path}: {state.error}"
+        checks.append((name, name, state.valid, detail, detail))
 
     try:
-        settings = load_settings()
+        settings = load_settings(
+            create_missing=False,
+            create_runtime_dirs=False,
+            readonly=True,
+        )
         runtime = settings["runtime_paths"]
         settings_ok = True
-        settings_detail_zh = f"根目录：{runtime['root_dir']}"
-        settings_detail_en = f"Root: {runtime['root_dir']}"
-    except Exception as e:
-        settings = {}
+        settings_detail = f"Root: {runtime['root_dir']}"
+    except Exception as exc:
         runtime = {}
         settings_ok = False
-        settings_detail_zh = f"读取失败：{e}"
-        settings_detail_en = f"Failed to load: {e}"
+        settings_detail = f"Failed to load: {exc}"
+    checks.append(("运行时配置", "Runtime settings", settings_ok, settings_detail, settings_detail))
 
-    checks.append(("运行时配置", "Runtime settings", settings_ok, settings_detail_zh, settings_detail_en))
-
-    root_dir = Path(runtime.get("root_dir", "")) if runtime else Path("")
-    incoming_dir = Path(runtime.get("incoming_root", "")) if runtime else Path("")
-
-    checks.append(("根目录可写", "Root writable", bool(runtime) and _path_writable(root_dir), f"根目录：{root_dir}", f"Root: {root_dir}"))
-    checks.append(("Incoming 可写", "Incoming writable", bool(runtime) and _path_writable(incoming_dir), f"Incoming：{incoming_dir}", f"Incoming: {incoming_dir}"))
-
-    try:
-        rules = load_rules()
-        rule_count = len(rules.get("rules", []))
-        rules_ok = rule_count > 0
-        rules_detail_zh = f"分类规则数量：{rule_count}"
-        rules_detail_en = f"Rule count: {rule_count}"
-    except Exception as e:
-        rules_ok = False
-        rules_detail_zh = f"读取失败：{e}"
-        rules_detail_en = f"Failed to load: {e}"
-
-    checks.append(("分类规则", "Classification rules", rules_ok, rules_detail_zh, rules_detail_en))
+    root_dir = Path(runtime["root_dir"]) if runtime else Path()
+    incoming_dir = Path(runtime["incoming_root"]) if runtime else Path()
+    checks.append((
+        "根目录可写",
+        "Root writable",
+        bool(runtime) and _path_writable_readonly(root_dir),
+        f"根目录：{root_dir}",
+        f"Root: {root_dir}",
+    ))
+    checks.append((
+        "Incoming 可写",
+        "Incoming writable",
+        bool(runtime) and _path_writable_readonly(incoming_dir),
+        f"Incoming：{incoming_dir}",
+        f"Incoming: {incoming_dir}",
+    ))
 
     try:
-        queue = load_pending_installs()
-        queue_ok = isinstance(queue, list)
-        queue_detail_zh = f"安装建议数量：{len(queue)}"
-        queue_detail_en = f"Suggestion count: {len(queue)}"
-    except Exception as e:
-        queue_ok = False
-        queue_detail_zh = f"读取失败：{e}"
-        queue_detail_en = f"Failed to load: {e}"
+        rules = load_rules(create_missing=False, readonly=True)
+        count = len(rules.get("rules", []))
+        checks.append(("分类规则", "Classification rules", count > 0, f"规则数量：{count}", f"Rule count: {count}"))
+    except Exception as exc:
+        checks.append(("分类规则", "Classification rules", False, f"读取失败：{exc}", f"Failed to load: {exc}"))
 
-    checks.append(("安装建议队列", "Install queue", queue_ok, queue_detail_zh, queue_detail_en))
+    try:
+        queue = read_json_snapshot(get_pending_installs_path(), expected_type=list)
+        checks.append(("安装建议队列", "Install queue", True, f"建议数量：{len(queue)}", f"Suggestion count: {len(queue)}"))
+    except Exception as exc:
+        checks.append(("安装建议队列", "Install queue", False, f"读取失败：{exc}", f"Failed to load: {exc}"))
 
     pyside_ok = importlib.util.find_spec("PySide6") is not None
     checks.append((
-        "GUI 依赖 PySide6",
-        "GUI dependency PySide6",
-        pyside_ok,
-        "PySide6 可用" if pyside_ok else "未检测到 PySide6，GUI 可能无法启动",
-        "PySide6 available" if pyside_ok else "PySide6 not found; GUI may not start",
+        "GUI 可选依赖",
+        "Optional GUI dependency",
+        True,
+        "PySide6 可用" if pyside_ok else "未安装 PySide6；CLI 功能不受影响",
+        "PySide6 available" if pyside_ok else "PySide6 is not installed; CLI features remain available",
     ))
 
     for index, (zh, en, passed, detail_zh, detail_en) in enumerate(checks, start=1):
         passed_all = passed_all and passed
         _add_result(table, index, zh, en, passed, detail_zh, detail_en, lang)
-
     console.print(table)
-
     console.print(
         Panel(
             text(
@@ -169,34 +175,69 @@ def run_doctor_report(lang: str = "zh") -> bool:
             box=box.SQUARE,
         )
     )
-
     return passed_all
 
 
 def run_self_test(lang: str = "zh") -> bool:
-    passed = run_doctor_report(lang)
+    """Run an isolated behavior check without consulting the active user state."""
+    original_home = os.environ.get("PATHPILOT_HOME")
+    try:
+        with tempfile.TemporaryDirectory(prefix="pathpilot-self-test-") as temp_name:
+            temp_root = Path(temp_name).resolve()
+            os.environ["PATHPILOT_HOME"] = str(temp_root / "home")
+            managed_root = temp_root / "managed"
+            source = temp_root / "source"
+            source.mkdir(parents=True)
+            ensure_user_config_files()
 
-    if passed:
-        console.print(
-            Panel(
-                text("PathPilot 基础自检通过。", "PathPilot basic self-test passed.", lang),
-                title=title_text("完成", "Done", lang),
-                border_style="green",
-                box=box.SQUARE,
-            )
-        )
-    else:
-        console.print(
-            Panel(
-                text(
-                    "PathPilot 自检未完全通过，请检查上方失败项。",
-                    "PathPilot self-test did not fully pass. Please check failed items above.",
-                    lang,
-                ),
-                title=title_text("需要处理", "Action Required", lang),
-                border_style="red",
-                box=box.SQUARE,
-            )
-        )
+            settings_path = get_settings_path()
+            settings_data = {
+                "watch_directories": [str(source)],
+                "base_paths": {"root_dir": str(managed_root)},
+                "behavior": {
+                    "ignore_hidden_files": True,
+                    "stable_check_seconds": 0,
+                    "stable_checks": 1,
+                    "create_missing_dirs": True,
+                    "overwrite_strategy": "rename",
+                },
+            }
+            atomic_write_json(settings_path, settings_data)
+            settings = load_settings()
+            rules = load_rules()
 
+            fixture = source / "pathpilot-self-test.txt"
+            fixture.write_text("isolated", encoding="utf-8")
+            handler = DownloadEventHandler(settings, rules)
+            handler._handle_file(fixture)
+            incoming = Path(settings["runtime_paths"]["incoming_root"]) / fixture.name
+            handler._handle_file(incoming)
+            final_path = (
+                Path(settings["runtime_paths"]["archive_root"])
+                / "05-Documents"
+                / "Mixed"
+                / fixture.name
+            )
+            passed = final_path.exists() and not fixture.exists()
+    except (JsonStoreError, OSError, KeyError, ValueError) as exc:
+        console.print(f"[red]{text('隔离自检失败', 'Isolated self-test failed', lang)}: {exc}[/red]")
+        passed = False
+    finally:
+        if original_home is None:
+            os.environ.pop("PATHPILOT_HOME", None)
+        else:
+            os.environ["PATHPILOT_HOME"] = original_home
+
+    console.print(
+        Panel(
+            text(
+                "PathPilot 隔离行为自检通过。" if passed else "PathPilot 隔离行为自检失败。",
+                "PathPilot isolated behavior self-test passed." if passed else "PathPilot isolated behavior self-test failed.",
+                lang,
+            ),
+            title=title_text("完成" if passed else "需要处理", "Done" if passed else "Action Required", lang),
+            border_style="green" if passed else "red",
+            box=box.SQUARE,
+        )
+    )
     return passed

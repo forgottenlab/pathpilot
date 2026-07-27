@@ -1,6 +1,7 @@
 param(
     [string]$InstallSource = "",
-    [switch]$SkipSelfTest
+    [switch]$SkipSelfTest,
+    [switch]$CliOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,4 +20,7 @@ if (-not (Test-Path $Installer)) {
     exit 1
 }
 
-& $Installer -InstallSource $InstallSource -SkipSelfTest:$SkipSelfTest
+& $Installer -InstallSource $InstallSource -SkipSelfTest:$SkipSelfTest -CliOnly:$CliOnly
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}

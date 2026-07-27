@@ -1,24 +1,62 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pathpilot"
-version = "0.2.1"
-description = "PathPilot - Downloads and installation path governance assistant."
+version = "0.2.2"
+description = "Windows download organization and safe installer suggestion governance."
+readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "forgottenlab" }
+]
+keywords = ["windows", "downloads", "file-organization", "installer", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
-    "watchdog==6.0.0",
-    "psutil==7.0.0",
-    "PySide6==6.8.2",
+    "watchdog>=6.0.0,<7",
+    "psutil>=7.0.0,<8",
     "rich>=13.7.0",
-    "typer>=0.12.0",
-    "questionary>=2.0.0"
+    "typer>=0.12.0"
+]
+
+[project.optional-dependencies]
+gui = [
+    "PySide6>=6.8,<7"
+]
+dev = [
+    "pytest>=8,<9",
+    "build>=1.2,<2"
+]
+all = [
+    "PySide6>=6.8,<7",
+    "pytest>=8,<9",
+    "build>=1.2,<2"
 ]
 
 [project.scripts]
 pathpilot = "app.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/forgottenlab/pathpilot"
+Repository = "https://github.com/forgottenlab/pathpilot"
+Issues = "https://github.com/forgottenlab/pathpilot/issues"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.data-files]
+"share/doc/pathpilot" = ["README.md", "README.zh-CN.md"]
+
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["app", "app.*"]
+exclude = ["tests", "tests.*"]
 

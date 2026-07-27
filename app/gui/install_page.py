@@ -10,12 +10,15 @@ from PySide6.QtWidgets import (
     QFrame
 )
 
+from app.core.path_policy import PathPolicyError, validate_install_target
+from app.core.json_store import JsonStoreError
+from app.core.settings import load_settings
 from app.installers.queue import (
-    get_pending_items,
     load_pending_installs,
     update_install_suggestion_status,
 )
 from app.installers.runner import run_install_record
+from app.installers.strategy import rebuild_execution_fields
 from app.gui.ui_helpers import open_in_explorer, normalize_display_name
 
 
@@ -23,6 +26,7 @@ class InstallPage(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.current_record: dict | None = None
+        self._target_dirty = False
         self._build_ui()
         self._setup_timer()
         self.refresh_table()
@@ -94,6 +98,7 @@ class InstallPage(QWidget):
 
         right.addWidget(QLabel("安装目录"))
         self.target_edit = QLineEdit()
+        self.target_edit.textEdited.connect(self.on_target_edited)
         right.addWidget(self.target_edit)
 
         self.browse_btn = QPushButton("选择自定义目录")
@@ -102,6 +107,8 @@ class InstallPage(QWidget):
 
         right.addWidget(QLabel("建议命令"))
         self.command_edit = QLineEdit()
+        self.command_edit.setReadOnly(True)
+        self.command_edit.setToolTip("仅供预览；该文本不会作为 shell 命令执行。")
         right.addWidget(self.command_edit)
 
         self.run_recommended_btn = QPushButton("使用当前目录安装")
@@ -169,21 +176,35 @@ class InstallPage(QWidget):
         self.refresh_table(keep_id=current_id, silent=True)
 
     def refresh_table(self, keep_id: int | None = None, silent: bool = False) -> None:
-        items = get_pending_items()
+        try:
+            items = [
+                item for item in load_pending_installs()
+                if item.get("status") in {"pending", "legacy_unsafe"}
+            ]
+        except JsonStoreError as exc:
+            self.summary_label.setText("安装建议队列损坏或被锁定")
+            if not silent:
+                QMessageBox.critical(self, "安装建议队列错误", str(exc))
+            return
         self.summary_label.setText(f"待处理安装建议：{len(items)}")
+        preserve_dirty = bool(silent and self._target_dirty and self.current_record)
+        preserved_id = int(self.current_record["id"]) if preserve_dirty else None
+        preserved_target = self.target_edit.text() if preserve_dirty else ""
+
+        self.table.blockSignals(True)
         self.table.setRowCount(len(items))
 
         selected_row = None
 
         for row, item in enumerate(items):
-            display_name = normalize_display_name(item["name"])
+            display_name = normalize_display_name(item.get("name", ""))
             values = [
-                str(item["id"]),
+                str(item.get("id", "")),
                 display_name,
-                item["source"],
-                item["family"],
-                item["mode"],
-                item["status"],
+                item.get("source", "legacy"),
+                item.get("installer_family", item.get("family", "unknown")),
+                item.get("mode", "suggest"),
+                item.get("status", "legacy_unsafe"),
             ]
 
             for col, value in enumerate(values):
@@ -191,12 +212,7 @@ class InstallPage(QWidget):
                 if col == 0:
                     table_item.setData(Qt.UserRole, item)
 
-                # 模式着色
-                if item["mode"] == "auto":
-                    table_item.setForeground(QColor("#86d993"))
-                elif item["mode"] == "try":
-                    table_item.setForeground(QColor("#f1c56b"))
-                elif item["mode"] == "suggest":
+                if item.get("mode", "suggest") == "suggest":
                     table_item.setForeground(QColor("#8ab4f8"))
 
                 self.table.setItem(row, col, table_item)
@@ -208,10 +224,17 @@ class InstallPage(QWidget):
             if selected_row is not None:
                 self.table.selectRow(selected_row)
             elif not silent:
+                selected_row = 0
                 self.table.selectRow(0)
         else:
             self.current_record = None
             self.clear_detail()
+        self.table.blockSignals(False)
+
+        if selected_row is not None:
+            record = items[selected_row]
+            keep_edit = preserved_id == int(record["id"])
+            self.show_record(record, preserve_target=preserved_target if keep_edit else None)
 
     def clear_detail(self) -> None:
         self.name_label.setText("名称：-")
@@ -221,6 +244,8 @@ class InstallPage(QWidget):
         self.installer_label.setText("安装包：-")
         self.target_edit.setText("")
         self.command_edit.setText("")
+        self.run_recommended_btn.setEnabled(False)
+        self._target_dirty = False
 
     def on_selection_changed(self) -> None:
         row = self.table.currentRow()
@@ -241,15 +266,55 @@ class InstallPage(QWidget):
             self.clear_detail()
             return
 
-        self.current_record = record
+        preserve = self.target_edit.text() if (
+            self._target_dirty
+            and self.current_record
+            and int(self.current_record["id"]) == int(record["id"])
+        ) else None
+        self.show_record(record, preserve_target=preserve)
 
-        self.name_label.setText(f"名称：{normalize_display_name(record['name'])}")
-        self.source_label.setText(f"来源：{record['source']}")
-        self.family_label.setText(f"家族：{record['family']}")
-        self.mode_label.setText(f"模式：{record['mode']}")
-        self.installer_label.setText(f"安装包：{record['installer']}")
-        self.target_edit.setText(record["target"])
-        self.command_edit.setText(record["command"])
+    def show_record(self, record: dict, preserve_target: str | None = None) -> None:
+        self.current_record = record
+        self.name_label.setText(f"名称：{normalize_display_name(record.get('name', ''))}")
+        self.source_label.setText(f"来源：{record.get('source', 'legacy')}")
+        self.family_label.setText(
+            f"家族：{record.get('installer_family', record.get('family', '-'))}"
+        )
+        self.mode_label.setText(f"模式：{record.get('mode', '-')}")
+        self.installer_label.setText(
+            f"安装包：{record.get('installer_path', record.get('installer', '-'))}"
+        )
+        is_legacy = record.get("status") == "legacy_unsafe" or "executable" not in record
+        self.run_recommended_btn.setEnabled(not is_legacy)
+        if preserve_target is None:
+            self.target_edit.setText(record.get("target_dir", record.get("target", "")))
+            self._target_dirty = False
+        else:
+            self.target_edit.setText(preserve_target)
+            self._target_dirty = True
+        if is_legacy:
+            self.command_edit.setText(
+                record.get("legacy_preview", "旧版 command-only 记录；请重新生成建议。")
+            )
+        else:
+            self.update_preview()
+
+    def on_target_edited(self, _value: str) -> None:
+        self._target_dirty = True
+        self.update_preview()
+
+    def update_preview(self) -> None:
+        if not self.current_record or "executable" not in self.current_record:
+            return
+        try:
+            fields = rebuild_execution_fields(
+                self.current_record,
+                self.target_edit.text().strip(),
+            )
+        except (KeyError, TypeError, ValueError):
+            self.command_edit.setText("目标目录无效")
+            return
+        self.command_edit.setText(fields["preview"])
 
     def choose_target_dir(self) -> None:
         if not self.current_record:
@@ -262,50 +327,96 @@ class InstallPage(QWidget):
 
         chosen = chosen.replace("\\", "/")
         self.target_edit.setText(chosen)
-
-        installer = self.current_record["installer"]
-        old_target = self.current_record["target"]
-        command = self.current_record["command"].replace(old_target, chosen)
-        self.command_edit.setText(command)
+        self._target_dirty = True
+        self.update_preview()
 
     def run_current_record(self) -> None:
         if not self.current_record:
             return
 
-        mode = self.current_record["mode"]
-        if mode == "suggest":
-            QMessageBox.information(self, "提示", "当前建议为 suggest 模式，默认不自动执行。")
+        if self.current_record.get("status") == "legacy_unsafe" or "executable" not in self.current_record:
+            QMessageBox.warning(self, "已阻止", "旧版 command-only 记录不允许执行，请重新生成建议。")
             return
 
-        items = load_pending_installs()
+        if self.current_record.get("mode") == "suggest":
+            answer = QMessageBox.question(
+                self,
+                "确认启动",
+                "所有安装建议都需要显式确认。是否使用当前目标目录启动安装器？\n"
+                "启动进程不表示安装成功。",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        try:
+            items = load_pending_installs()
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "安装建议队列错误", str(exc))
+            return
         target_id = int(self.current_record["id"])
         record = next((x for x in items if int(x["id"]) == target_id), None)
         if not record:
             QMessageBox.warning(self, "错误", "未找到该安装建议。")
             return
 
-        record["target"] = self.target_edit.text().strip()
-        record["command"] = self.command_edit.text().strip()
+        if record.get("status") != "pending" or "executable" not in record:
+            QMessageBox.warning(self, "已阻止", "建议状态或结构已变化，请刷新后重试。")
+            return
 
-        ok = run_install_record(record)
+        try:
+            settings = load_settings()
+            runtime_paths = settings["runtime_paths"]
+            apps_root = runtime_paths["apps_root"]
+            installers_root = str(
+                Path(runtime_paths["archive_root"])
+                / "01-Software"
+                / "_IncomingInstallers"
+            )
+            target = validate_install_target(self.target_edit.text().strip(), apps_root)
+        except PathPolicyError as exc:
+            QMessageBox.warning(self, "路径不安全", exc.localized("zh"))
+            return
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "配置文件错误", str(exc))
+            return
+
+        try:
+            ok = run_install_record(
+                record,
+                apps_root=apps_root,
+                installers_root=installers_root,
+                target_dir=target,
+            )
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "安装建议队列错误", str(exc))
+            return
         if ok:
-            QMessageBox.information(self, "成功", "安装命令已启动。")
+            self._target_dirty = False
+            QMessageBox.information(self, "已启动", "安装器进程已启动；这不代表安装成功。")
             self.refresh_table()
         else:
-            QMessageBox.warning(self, "失败", "安装命令启动失败。")
+            QMessageBox.warning(self, "失败", "安装器启动失败或被安全策略阻止。")
 
     def skip_current_record(self) -> None:
         if not self.current_record:
             return
 
-        update_install_suggestion_status(int(self.current_record["id"]), "skipped")
+        try:
+            update_install_suggestion_status(int(self.current_record["id"]), "skipped")
+        except JsonStoreError as exc:
+            QMessageBox.critical(self, "安装建议队列错误", str(exc))
+            return
         QMessageBox.information(self, "完成", "已跳过该安装建议。")
         self.refresh_table()
 
     def open_installer_location(self) -> None:
         if not self.current_record:
             return
-        open_in_explorer(self.current_record["installer"])
+        open_in_explorer(
+            self.current_record.get("installer_path", self.current_record.get("installer", ""))
+        )
 
     def open_target_location(self) -> None:
         if not self.current_record:

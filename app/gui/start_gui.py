@@ -6,9 +6,15 @@ from PySide6.QtWidgets import QApplication
 from app.gui.main_window import MainWindow
 
 
+def create_main_window() -> tuple[QApplication, MainWindow]:
+    """Create the GUI for smoke tests and the CLI launcher."""
+    app = QApplication.instance() or QApplication(sys.argv)
+    return app, MainWindow()
+
+
 def main() -> None:
-    app = QApplication(sys.argv)
-    window = MainWindow()
+    """Internal GUI launcher used by the canonical ``pathpilot ui`` command."""
+    app, window = create_main_window()
     window.show()
     sys.exit(app.exec())
 

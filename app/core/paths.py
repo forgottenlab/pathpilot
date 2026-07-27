@@ -1,16 +1,27 @@
 from __future__ import annotations
 
-import json
 import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from app.core.json_store import atomic_write_json, ensure_json_file, read_json
 
-APP_HOME = Path(os.environ.get("PATHPILOT_HOME", Path.home() / ".pathpilot")).resolve()
-CONFIG_DIR = APP_HOME / "config"
-DATA_DIR = APP_HOME / "data"
-LOG_DIR = DATA_DIR / "logs"
+
+def get_app_home() -> Path:
+    return Path(os.environ.get("PATHPILOT_HOME", Path.home() / ".pathpilot")).resolve()
+
+
+def get_config_dir() -> Path:
+    return get_app_home() / "config"
+
+
+def get_data_dir() -> Path:
+    return get_app_home() / "data"
+
+
+def get_log_dir() -> Path:
+    return get_data_dir() / "logs"
 
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -80,30 +91,25 @@ DEFAULT_INSTALLER_RULES: dict[str, Any] = {
                 "filename_contains": ["ollama"]
             },
             "target": "{apps_root}/Professional/AI/Ollama",
-            "command_template": "\"{installer}\" /DIR=\"{target}\"",
             "family": "inno_setup",
-            "mode": "auto"
+            "mode": "suggest"
         }
     ],
     "installer_families": [
         {
             "family": "inno_setup",
-            "command_template": "\"{installer}\" /DIR=\"{target}\"",
-            "mode": "auto"
+            "mode": "suggest"
         },
         {
             "family": "nsis",
-            "command_template": "\"{installer}\" /D={target}",
-            "mode": "try"
+            "mode": "suggest"
         },
         {
             "family": "msi",
-            "command_template": "msiexec /i \"{installer}\"",
             "mode": "suggest"
         },
         {
             "family": "unknown",
-            "command_template": "\"{installer}\"",
             "mode": "suggest"
         }
     ]
@@ -130,17 +136,7 @@ def deep_merge(default: dict[str, Any], current: dict[str, Any]) -> dict[str, An
 
 
 def read_json_or_default(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return deepcopy(default)
-
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return deepcopy(default)
-
-    if data in ({}, [], None):
-        return deepcopy(default)
+    data = read_json(path, default=default)
 
     if isinstance(default, dict) and isinstance(data, dict):
         return deep_merge(default, data)
@@ -149,42 +145,37 @@ def read_json_or_default(path: Path, default: Any) -> Any:
 
 
 def write_json(path: Path, data: Any) -> None:
-    ensure_dir(path.parent)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def ensure_json_file(path: Path, default: Any) -> None:
-    data = read_json_or_default(path, default)
-    write_json(path, data)
+    atomic_write_json(path, data)
 
 
 def ensure_user_config_files() -> None:
-    ensure_dir(CONFIG_DIR)
-    ensure_dir(DATA_DIR)
-    ensure_dir(LOG_DIR)
+    config_dir = get_config_dir()
+    data_dir = get_data_dir()
+    ensure_dir(config_dir)
+    ensure_dir(data_dir)
+    ensure_dir(get_log_dir())
 
-    ensure_json_file(CONFIG_DIR / "settings.json", DEFAULT_SETTINGS)
-    ensure_json_file(CONFIG_DIR / "rules.json", DEFAULT_RULES)
-    ensure_json_file(CONFIG_DIR / "installer_rules.json", DEFAULT_INSTALLER_RULES)
-    ensure_json_file(DATA_DIR / "pending_installs.json", [])
+    ensure_json_file(config_dir / "settings.json", DEFAULT_SETTINGS, expected_type=dict)
+    ensure_json_file(config_dir / "rules.json", DEFAULT_RULES, expected_type=dict)
+    ensure_json_file(
+        config_dir / "installer_rules.json",
+        DEFAULT_INSTALLER_RULES,
+        expected_type=dict,
+    )
+    ensure_json_file(data_dir / "pending_installs.json", [], expected_type=list)
 
 
 def get_settings_path() -> Path:
-    ensure_user_config_files()
-    return CONFIG_DIR / "settings.json"
+    return get_config_dir() / "settings.json"
 
 
 def get_rules_path() -> Path:
-    ensure_user_config_files()
-    return CONFIG_DIR / "rules.json"
+    return get_config_dir() / "rules.json"
 
 
 def get_installer_rules_path() -> Path:
-    ensure_user_config_files()
-    return CONFIG_DIR / "installer_rules.json"
+    return get_config_dir() / "installer_rules.json"
 
 
 def get_pending_installs_path() -> Path:
-    ensure_user_config_files()
-    return DATA_DIR / "pending_installs.json"
+    return get_data_dir() / "pending_installs.json"

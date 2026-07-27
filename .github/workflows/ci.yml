@@ -1,0 +1,185 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: Configure isolated PathPilot state
+        shell: pwsh
+        run: |
+          "PATHPILOT_HOME=$env:RUNNER_TEMP\pathpilot-core-${{ matrix.python-version }}" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install core and development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run tests
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          --basetemp "${{ runner.temp }}\pytest-${{ matrix.python-version }}"
+      - name: Compile Python
+        run: python -m compileall -q app tests scripts/check_release_artifacts.py
+      - name: CLI help smoke
+        shell: pwsh
+        run: |
+          pathpilot --help
+          pathpilot installs --help
+          pathpilot installs run --help
+      - name: Initialize isolated PathPilot state
+        shell: pwsh
+        run: |
+          python -c "from app.core.paths import ensure_user_config_files; from app.core.settings import load_settings; ensure_user_config_files(); load_settings()"
+      - name: Read-only doctor
+        shell: pwsh
+        run: |
+          pathpilot doctor
+      - name: Isolated behavior test
+        shell: pwsh
+        run: |
+          pathpilot test
+      - name: PowerShell AST
+        shell: pwsh
+        run: |
+          $errors = @()
+          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$parseErrors) | Out-Null
+            $errors += $parseErrors
+          }
+          if ($errors.Count) { $errors | ForEach-Object Message; exit 1 }
+      - name: Whitespace
+        run: git diff --check HEAD
+
+  package:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+    steps:
+      - name: Configure isolated PathPilot state
+        shell: pwsh
+        run: |
+          "PATHPILOT_HOME=$env:RUNNER_TEMP\pathpilot-package" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m build
+          python scripts/check_release_artifacts.py dist
+      - name: Create CLI-only smoke environment
+        shell: pwsh
+        run: |
+          $cliRoot = "$env:RUNNER_TEMP\cli-smoke"
+          python -m venv $cliRoot
+          "CLI_SMOKE_PYTHON=$cliRoot\Scripts\python.exe" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CLI_SMOKE_PATHPILOT=$cliRoot\Scripts\pathpilot.exe" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Install CLI-only wheel
+        shell: pwsh
+        run: |
+          $wheel = (Get-ChildItem dist\*.whl).FullName
+          & $env:CLI_SMOKE_PYTHON -m pip install $wheel
+      - name: Verify PySide6 is absent
+        shell: pwsh
+        run: |
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $env:CLI_SMOKE_PYTHON -c "import importlib.metadata as m, importlib.util; assert m.version('pathpilot') == '0.2.2'; assert importlib.util.find_spec('PySide6') is None; import app"
+          } finally {
+            Pop-Location
+          }
+      - name: CLI-only help and status
+        shell: pwsh
+        run: |
+          & $env:CLI_SMOKE_PATHPILOT --help
+          & $env:CLI_SMOKE_PATHPILOT status
+      - name: Initialize isolated CLI-only state
+        shell: pwsh
+        run: |
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & $env:CLI_SMOKE_PYTHON -c "from app.core.paths import ensure_user_config_files; from app.core.settings import load_settings; ensure_user_config_files(); load_settings()"
+          } finally {
+            Pop-Location
+          }
+      - name: CLI-only doctor
+        shell: pwsh
+        run: |
+          & $env:CLI_SMOKE_PATHPILOT doctor
+      - name: CLI-only behavior test
+        shell: pwsh
+        run: |
+          & $env:CLI_SMOKE_PATHPILOT test
+      - name: Verify GUI extra missing message
+        shell: pwsh
+        run: |
+          $nativePreference = $PSNativeCommandUseErrorActionPreference
+          $PSNativeCommandUseErrorActionPreference = $false
+          try {
+            $uiOutput = & $env:CLI_SMOKE_PATHPILOT --lang en ui 2>&1
+            $uiExitCode = $LASTEXITCODE
+          } finally {
+            $PSNativeCommandUseErrorActionPreference = $nativePreference
+          }
+          $uiText = $uiOutput | Out-String
+          $uiText | Write-Output
+          if ($uiExitCode -eq 0) { throw "CLI-only UI unexpectedly returned exit code 0." }
+          if ($uiText -match "Traceback") { throw "CLI-only UI emitted a traceback." }
+          if ($uiText -notmatch "pathpilot\[gui\]") { throw "CLI-only UI omitted the pathpilot[gui] install hint." }
+          $global:LASTEXITCODE = 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pathpilot-dist
+          path: dist/*
+
+  gui-smoke:
+    needs: package
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+    steps:
+      - name: Configure isolated PathPilot state
+        shell: pwsh
+        run: |
+          "PATHPILOT_HOME=$env:RUNNER_TEMP\pathpilot-gui" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: pathpilot-dist
+          path: dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install GUI extra and create window offscreen
+        shell: pwsh
+        run: |
+          $wheel = (Get-ChildItem dist\*.whl).FullName
+          python -m pip install "${wheel}[gui]" "pytest>=8,<9"
+          Push-Location $env:RUNNER_TEMP
+          try {
+            python -c "import importlib.metadata as m; assert m.version('pathpilot') == '0.2.2'; from app.gui.start_gui import create_main_window; app, window = create_main_window(); window.close(); app.quit(); print('GUI wheel smoke passed')"
+          } finally {
+            Pop-Location
+          }
+          python -m pytest -q -p no:cacheprovider tests\test_installer_security.py --basetemp "$env:RUNNER_TEMP\gui-pytest"
