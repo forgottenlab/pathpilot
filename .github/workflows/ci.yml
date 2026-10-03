@@ -182,4 +182,4 @@ jobs:
           } finally {
             Pop-Location
           }
-          python -m pytest -q -p no:cacheprovider tests\test_installer_security.py --basetemp "$env:RUNNER_TEMP\gui-pytest"
+          python -m pytest -q -p no:cacheprovider tests\test_installer_security.py tests\test_location_reveal.py --basetemp "$env:RUNNER_TEMP\gui-pytest"
