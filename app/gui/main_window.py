@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 from app.installers.queue import get_pending_items
 from app.gui.install_page import InstallPage
 from app.gui.settings_page import SettingsPage
-from app.gui.ui_helpers import open_in_explorer
+from app.gui.ui_helpers import open_directory_in_explorer
 from app.core.settings import load_settings
 
 
@@ -39,10 +39,10 @@ class MainWindow(QMainWindow):
         self.refresh_status_btn.clicked.connect(self.refresh_status)
 
         self.open_root_btn = QPushButton("打开根目录")
-        self.open_root_btn.clicked.connect(lambda: open_in_explorer(self.runtime_paths["root_dir"]))
+        self.open_root_btn.clicked.connect(lambda: open_directory_in_explorer(self.runtime_paths["root_dir"]))
 
         self.open_incoming_btn = QPushButton("打开 Incoming")
-        self.open_incoming_btn.clicked.connect(lambda: open_in_explorer(self.runtime_paths["incoming_root"]))
+        self.open_incoming_btn.clicked.connect(lambda: open_directory_in_explorer(self.runtime_paths["incoming_root"]))
 
         top_bar.addWidget(self.status_label, 1)
         top_bar.addWidget(self.refresh_status_btn)

@@ -25,6 +25,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Opening an installer location no longer risks launching the installer itself.
 - Removed shell-command installer execution.
 - Blocked legacy command-only records from execution.
 - Prevented concurrent JSON writers from overwriting each other.

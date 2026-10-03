@@ -19,7 +19,9 @@ from app.installers.queue import (
 )
 from app.installers.runner import run_install_record
 from app.installers.strategy import rebuild_execution_fields
-from app.gui.ui_helpers import open_in_explorer, normalize_display_name
+from app.gui.ui_helpers import (
+    open_directory_in_explorer, reveal_file_in_explorer, normalize_display_name,
+)
 
 
 class InstallPage(QWidget):
@@ -414,11 +416,13 @@ class InstallPage(QWidget):
     def open_installer_location(self) -> None:
         if not self.current_record:
             return
-        open_in_explorer(
+        if not reveal_file_in_explorer(
             self.current_record.get("installer_path", self.current_record.get("installer", ""))
-        )
+        ):
+            QMessageBox.warning(self, "无法打开位置", "安装包路径为空、父目录不存在，或无法打开该目录。")
 
     def open_target_location(self) -> None:
         if not self.current_record:
             return
-        open_in_explorer(self.target_edit.text().strip())
+        if not open_directory_in_explorer(self.target_edit.text().strip()):
+            QMessageBox.warning(self, "无法打开目录", "请选择已存在的目录；文件或尚未创建的路径不会被打开。")
