@@ -31,3 +31,24 @@ def runtime_paths(tmp_path: Path) -> dict[str, str]:
         "incoming_root": str(root / "Downloads" / "00-Incoming"),
         "user_downloads": str(tmp_path / "User Downloads"),
     }
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:
+    """Close leftover Qt widgets before interpreter shutdown."""
+    # PySide6 6.12 on Windows can access-violate after a passing
+    # session if QApplication still owns widgets at process exit.
+    try:
+        from PySide6.QtWidgets import QApplication
+    except ImportError:
+        return
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in list(app.allWidgets()):
+        widget.hide()
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
+    import gc
+    gc.collect()
+    app.processEvents()
