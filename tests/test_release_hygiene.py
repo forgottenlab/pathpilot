@@ -286,7 +286,7 @@ def test_ci_configures_isolated_home_at_runtime_for_each_job() -> None:
             "python -m pip install",
         ),
         "package": ("pathpilot-package", "python -m build"),
-        "gui-smoke": ("pathpilot-gui", "Install GUI extra and create window offscreen"),
+        "gui-smoke": ("pathpilot-gui", "Install GUI extra and pytest"),
     }
     for job_name, (home_suffix, first_operation) in expected.items():
         block = _workflow_job_block(workflow, job_name)
@@ -353,6 +353,28 @@ def test_ci_runtime_checks_are_split_and_expected_ui_failure_is_captured() -> No
     assert 'PYTHONUTF8: "1"' in core
     assert 'PYTHONUTF8: "1"' in package
     assert "gui-smoke:" in workflow
-    assert "Install GUI extra and create window offscreen" in workflow
+    assert "Install GUI extra and pytest" in workflow
+    assert "Verify GUI wheel and create offscreen window" in workflow
+    assert "Run GUI regression tests" in workflow
+    assert "Install GUI extra and create window offscreen" not in workflow
+    gui = _workflow_job_block(workflow, "gui-smoke")
+    gui_steps = (
+        "Install GUI extra and pytest",
+        "Verify GUI wheel and create offscreen window",
+        "Run GUI regression tests",
+    )
+    gui_positions = [gui.index(f"- name: {name}") for name in gui_steps]
+    assert gui_positions == sorted(gui_positions)
+    assert "$pipExitCode = $LASTEXITCODE" in gui
+    assert "$smokeExitCode = $LASTEXITCODE" in gui
+    assert "$pytestExitCode = $LASTEXITCODE" in gui
+    assert 'Write-Host "pip exit code: $pipExitCode"' in gui
+    assert 'Write-Host "GUI wheel smoke exit code: $smokeExitCode"' in gui
+    assert 'Write-Host "GUI regression pytest exit code: $pytestExitCode"' in gui
+    assert "if ($pipExitCode -ne 0) { exit $pipExitCode }" in gui
+    assert "if ($smokeExitCode -ne 0) { exit $smokeExitCode }" in gui
+    assert "if ($pytestExitCode -ne 0) { exit $pytestExitCode }" in gui
+    assert "continue-on-error" not in gui
+    assert "$global:LASTEXITCODE = 0" not in gui
     assert "C:\\Users\\" not in workflow
     assert "token" not in workflow.lower()

@@ -171,15 +171,48 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install GUI extra and create window offscreen
+      - name: Install GUI extra and pytest
         shell: pwsh
         run: |
           $wheel = (Get-ChildItem dist\*.whl).FullName
-          python -m pip install "${wheel}[gui]" "pytest>=8,<9"
-          Push-Location $env:RUNNER_TEMP
+          $nativePreference = $PSNativeCommandUseErrorActionPreference
+          $PSNativeCommandUseErrorActionPreference = $false
           try {
-            python -c "import importlib.metadata as m; assert m.version('pathpilot') == '0.2.2'; from app.gui.start_gui import create_main_window; app, window = create_main_window(); window.close(); app.quit(); print('GUI wheel smoke passed')"
+            python -m pip install "${wheel}[gui]" "pytest>=8,<9"
+            $pipExitCode = $LASTEXITCODE
           } finally {
-            Pop-Location
+            $PSNativeCommandUseErrorActionPreference = $nativePreference
           }
-          python -m pytest -q -p no:cacheprovider tests\test_installer_security.py tests\test_location_reveal.py --basetemp "$env:RUNNER_TEMP\gui-pytest"
+          Write-Host "pip exit code: $pipExitCode"
+          if ($pipExitCode -ne 0) { exit $pipExitCode }
+      - name: Verify GUI wheel and create offscreen window
+        shell: pwsh
+        run: |
+          $nativePreference = $PSNativeCommandUseErrorActionPreference
+          $PSNativeCommandUseErrorActionPreference = $false
+          try {
+            Push-Location $env:RUNNER_TEMP
+            try {
+              python -c "import importlib.metadata as m; assert m.version('pathpilot') == '0.2.2'; from app.gui.start_gui import create_main_window; app, window = create_main_window(); window.close(); app.quit(); print('GUI wheel smoke passed')"
+              $smokeExitCode = $LASTEXITCODE
+            } finally {
+              Pop-Location
+            }
+          } finally {
+            $PSNativeCommandUseErrorActionPreference = $nativePreference
+          }
+          Write-Host "GUI wheel smoke exit code: $smokeExitCode"
+          if ($smokeExitCode -ne 0) { exit $smokeExitCode }
+      - name: Run GUI regression tests
+        shell: pwsh
+        run: |
+          $nativePreference = $PSNativeCommandUseErrorActionPreference
+          $PSNativeCommandUseErrorActionPreference = $false
+          try {
+            python -m pytest -q -p no:cacheprovider tests\test_installer_security.py tests\test_location_reveal.py --basetemp "$env:RUNNER_TEMP\gui-pytest"
+            $pytestExitCode = $LASTEXITCODE
+          } finally {
+            $PSNativeCommandUseErrorActionPreference = $nativePreference
+          }
+          Write-Host "GUI regression pytest exit code: $pytestExitCode"
+          if ($pytestExitCode -ne 0) { exit $pytestExitCode }

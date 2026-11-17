@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- GUI CI now records the actual exit code of each Python command, and GUI
+  regression tests close leftover Qt widgets before interpreter shutdown so a
+  passing session cannot fail the job with a Windows access violation.
+
 ### Security
 
 - Classification rule targets must resolve to a child of the managed archive
