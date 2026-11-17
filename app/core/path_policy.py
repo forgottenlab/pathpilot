@@ -150,6 +150,27 @@ def validate_install_target(
     return resolved
 
 
+def validate_classification_target(
+    path: str | os.PathLike[str],
+    archive_root: str | os.PathLike[str],
+) -> Path:
+    resolved = normalize_path(path)
+    resolved_archive = normalize_path(archive_root)
+    if is_protected_path(resolved):
+        raise PathPolicyError(
+            f"分类目标位于受保护位置: {resolved}",
+            f"The classification target is in a protected location: {resolved}",
+        )
+    if _path_key(resolved) == _path_key(resolved_archive) or not _is_same_or_child(
+        resolved, resolved_archive
+    ):
+        raise PathPolicyError(
+            f"分类目标必须是归档根目录下的子目录: {resolved}",
+            f"The classification target must be a child of the archive root: {resolved}",
+        )
+    return resolved
+
+
 def validate_installer_path(
     path: str | os.PathLike[str],
     installers_root: str | os.PathLike[str],

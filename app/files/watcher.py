@@ -9,6 +9,7 @@ from watchdog.observers import Observer
 
 from app.core.path_policy import (
     normalize_path,
+    validate_classification_target,
     validate_root_directory,
     validate_source_directory,
 )
@@ -162,9 +163,14 @@ class DownloadEventHandler(FileSystemEventHandler):
                 return
 
             target_dir = classify_file(file_path, self.rules, self.runtime_paths)
+            archive_root = self.runtime_paths["archive_root"]
+            # Validate before and after directory creation so a junction or
+            # symlink that escapes the archive tree cannot be used as a target.
+            target_dir = validate_classification_target(target_dir, archive_root)
             ensure_dir(target_dir)
+            target_dir = validate_classification_target(target_dir, archive_root)
 
-            if current_parent == target_dir.resolve():
+            if current_parent == target_dir:
                 log(text(f"文件已在目标目录，跳过: {file_path}", f"File already in target directory; skipped: {file_path}"))
                 return
 

@@ -9,6 +9,7 @@ from app.core.path_policy import (
     PathPolicyError,
     normalize_path,
     paths_overlap,
+    validate_classification_target,
     validate_install_target,
     validate_root_directory,
     validate_source_directory,
@@ -86,3 +87,28 @@ def test_watcher_fails_closed_before_creating_managed_source(
     with pytest.raises(PathPolicyError):
         start_watching(settings, {"rules": []})
     assert not Path(runtime_paths["apps_root"]).exists()
+
+
+def test_archive_child_is_valid_classification_target(runtime_paths: dict[str, str]) -> None:
+    target = Path(runtime_paths["archive_root"]) / "05-Documents" / "Mixed"
+    assert validate_classification_target(
+        target, runtime_paths["archive_root"]
+    ) == normalize_path(target)
+
+
+def test_classification_target_cannot_be_archive_root(runtime_paths: dict[str, str]) -> None:
+    with pytest.raises(PathPolicyError):
+        validate_classification_target(
+            runtime_paths["archive_root"], runtime_paths["archive_root"]
+        )
+
+
+def test_classification_target_cannot_escape_archive(runtime_paths: dict[str, str]) -> None:
+    escaped = Path(runtime_paths["archive_root"]) / ".." / "Outside"
+    with pytest.raises(PathPolicyError):
+        validate_classification_target(escaped, runtime_paths["archive_root"])
+
+
+def test_classification_target_rejects_protected_location() -> None:
+    with pytest.raises(PathPolicyError):
+        validate_classification_target(Path(r"C:\Windows\Temp"), Path(r"C:\Windows"))
