@@ -5,6 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Classification rule targets must resolve to a child of the managed archive
+  root. Absolute paths, parent-directory traversal, other drive letters, and
+  directory junctions or symbolic links that escape the archive tree are
+  rejected before any file is moved.
+
 ## [0.2.2] - 2026-10-04
 
 ### Added
