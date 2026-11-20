@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
-from app.core.json_store import atomic_write_json, ensure_json_file, read_json, update_json
+from app.core.json_store import ensure_json_file, read_json, update_json
 from app.core.paths import get_pending_installs_path
 
 
@@ -22,6 +24,14 @@ def _ensure_queue_file() -> None:
     ensure_json_file(get_pending_installs_path(), [], expected_type=list)
 
 
+def _has_structured_execution(record: dict[str, Any]) -> bool:
+    return (
+        all(isinstance(record.get(key), str) for key in STRUCTURED_EXECUTION_FIELDS - {"args"})
+        and isinstance(record.get("args"), list)
+        and all(isinstance(arg, str) for arg in record["args"])
+    )
+
+
 def _normalize_items(data: list[Any]) -> tuple[list[dict[str, Any]], bool]:
     normalized: list[dict[str, Any]] = []
     changed = False
@@ -30,14 +40,8 @@ def _normalize_items(data: list[Any]) -> tuple[list[dict[str, Any]], bool]:
             changed = True
             continue
         record = dict(item)
-        has_structured_execution = (
-            STRUCTURED_EXECUTION_FIELDS.issubset(record)
-            and isinstance(record.get("executable"), str)
-            and isinstance(record.get("args"), list)
-            and all(isinstance(arg, str) for arg in record.get("args", []))
-        )
-        if not has_structured_execution and "command" in record:
-            if record.get("status") != "legacy_unsafe":
+        if not _has_structured_execution(record) and "command" in record:
+            if record.get("status") not in {"legacy_unsafe", "skipped"}:
                 record["status"] = "legacy_unsafe"
                 record["updated_at"] = datetime.now().isoformat(timespec="seconds")
                 changed = True
@@ -81,15 +85,6 @@ def load_pending_installs(
     )
 
 
-def save_pending_installs(
-    items: list[dict[str, Any]],
-    *,
-    lock_timeout: float = 5.0,
-) -> None:
-    _ensure_queue_file()
-    atomic_write_json(get_pending_installs_path(), items, lock_timeout=lock_timeout)
-
-
 def _next_id(items: list[dict[str, Any]]) -> int:
     if not items:
         return 1
@@ -123,10 +118,10 @@ def add_install_suggestion(
                 return item
 
         record = {
+            **suggestion,
             "id": _next_id(items),
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "status": "pending",
-            **suggestion,
         }
         items.append(record)
         current[:] = items
@@ -143,39 +138,90 @@ def add_install_suggestion(
     return result
 
 
-def update_install_suggestion_status(record_id: int, status: str) -> dict[str, Any] | None:
-    return update_install_suggestion_record(record_id, {"status": status})
-
-
-def update_install_suggestion_record(
+def _transition_record(
     record_id: int,
-    updates: dict[str, Any],
-    *,
-    lock_timeout: float = 5.0,
+    transition: Callable[[dict[str, Any]], dict[str, Any] | None],
 ) -> dict[str, Any] | None:
-    _ensure_queue_file()
-    result: dict[str, Any] | None = None
-
     def update_record(current: list[Any]) -> dict[str, Any] | None:
-        nonlocal result
         items, _ = _normalize_items(current)
         current[:] = items
         for item in items:
             if int(item.get("id", 0)) == int(record_id):
+                updates = transition(item)
+                if updates is None:
+                    return None
                 item.update(updates)
                 item["updated_at"] = datetime.now().isoformat(timespec="seconds")
-                result = item
                 return item
         return None
 
-    update_json(
-        get_pending_installs_path(),
-        update_record,
-        default=[],
-        expected_type=list,
-        lock_timeout=lock_timeout,
-    )
-    return result
+    return update_json(get_pending_installs_path(), update_record, default=[], expected_type=list)
+
+
+def claim_install_suggestion(
+    record_id: int,
+    *,
+    expected_record: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Claim the current pending snapshot only if its reviewed execution fields still match."""
+
+    def claim(record: dict[str, Any]) -> dict[str, Any] | None:
+        if record.get("status") != "pending" or not _has_structured_execution(record):
+            return None
+        if expected_record is not None and (
+            expected_record.get("status") != "pending"
+            or any(record[key] != expected_record.get(key) for key in STRUCTURED_EXECUTION_FIELDS)
+        ):
+            return None
+        return {"status": "claimed", "claim_id": uuid4().hex}
+
+    return _transition_record(record_id, claim)
+
+
+def _transition_claim(
+    record_id: int, claim_id: str, expected_status: str, updates: dict[str, Any],
+) -> dict[str, Any] | None:
+    def advance(record: dict[str, Any]) -> dict[str, Any] | None:
+        if (
+            claim_id
+            and record.get("claim_id") == claim_id
+            and record.get("status") == expected_status
+        ):
+            return updates
+        return None
+
+    return _transition_record(record_id, advance)
+
+
+def prepare_install_launch(
+    record_id: int, claim_id: str, fields: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Persist the validated argv before Popen. An interrupted launch must not be retried."""
+    updates = {key: fields[key] for key in STRUCTURED_EXECUTION_FIELDS - {"mode"}}
+    updates["confirmed_at"] = datetime.now().isoformat(timespec="seconds")
+    updates["status"] = "launching"
+    return _transition_claim(record_id, claim_id, "claimed", updates)
+
+
+def finish_install_claim(
+    record_id: int, claim_id: str, status: str,
+) -> dict[str, Any] | None:
+    if status == "blocked":
+        expected = "claimed"
+    elif status in {"launched", "launch_failed", "launch_unknown"}:
+        expected = "launching"
+    else:
+        raise ValueError(f"Invalid install claim outcome: {status}")
+    return _transition_claim(record_id, claim_id, expected, {"status": status})
+
+
+def skip_install_suggestion(record_id: int) -> dict[str, Any] | None:
+    def skip(record: dict[str, Any]) -> dict[str, Any] | None:
+        if record.get("status") in {"pending", "legacy_unsafe"}:
+            return {"status": "skipped"}
+        return None
+
+    return _transition_record(record_id, skip)
 
 
 def get_pending_items() -> list[dict[str, Any]]:

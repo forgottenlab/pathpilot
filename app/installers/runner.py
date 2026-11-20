@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import subprocess
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from app.core.logger import log
 from app.core.i18n import text
+from app.core.json_store import JsonStoreError
 from app.core.path_policy import PathPolicyError, validate_installer_path, validate_install_target
-from app.installers.queue import update_install_suggestion_record
+from app.installers.queue import claim_install_suggestion, finish_install_claim, prepare_install_launch
 from app.installers.strategy import rebuild_execution_fields
 
 
@@ -26,22 +26,6 @@ def log_install_suggestion(record: dict[str, Any]) -> None:
     log("=" * 60)
 
 
-def _is_legacy_record(record: dict[str, Any]) -> bool:
-    return record.get("status") == "legacy_unsafe" or (
-        "command" in record
-        and not all(
-            key in record
-            for key in (
-                "executable",
-                "args",
-                "installer_path",
-                "target_dir",
-                "installer_family",
-            )
-        )
-    )
-
-
 def run_install_record(
     record: dict[str, Any],
     *,
@@ -50,49 +34,47 @@ def run_install_record(
     target_dir: str | Path | None = None,
 ) -> bool:
     record_id = int(record["id"])
-
-    if _is_legacy_record(record):
-        update_install_suggestion_record(record_id, {"status": "legacy_unsafe"})
-        log(text(f"安装建议 #{record_id} 是旧版 command-only 记录，已拒绝执行。", f"Suggestion #{record_id} is a legacy command-only record and was rejected."))
+    claimed = claim_install_suggestion(record_id, expected_record=record)
+    if claimed is None:
+        log(text(f"安装建议 #{record_id} 无法领取。", f"Suggestion #{record_id} could not be claimed."))
         return False
 
+    claim_id = claimed["claim_id"]
     try:
-        if record.get("status") != "pending":
-            raise ValueError(f"Record status is not pending: {record.get('status')}")
-
-        installer = validate_installer_path(record["installer_path"], installers_root)
+        installer = validate_installer_path(claimed["installer_path"], installers_root)
         final_target = validate_install_target(
-            target_dir if target_dir is not None else record["target_dir"],
+            target_dir if target_dir is not None else claimed["target_dir"],
             apps_root,
         )
         final_fields = rebuild_execution_fields(
-            {**record, "installer_path": str(installer)},
+            {**claimed, "installer_path": str(installer)},
             final_target,
         )
-        confirmed_at = datetime.now().isoformat(timespec="seconds")
-        persisted = update_install_suggestion_record(
-            record_id,
-            {
-                **final_fields,
-                "confirmed_at": confirmed_at,
-                "status": "pending",
-            },
-        )
-        if persisted is None:
-            raise ValueError(f"Install suggestion no longer exists: {record_id}")
-
-        argv = [final_fields["executable"], *final_fields["args"]]
-        log(text(f"开始启动安装建议 #{record_id}: {final_fields['preview']}", f"Launching suggestion #{record_id}: {final_fields['preview']}"))
-        subprocess.Popen(argv, shell=False)
     except (PathPolicyError, KeyError, TypeError, ValueError) as exc:
-        update_install_suggestion_record(record_id, {"status": "blocked"})
+        finish_install_claim(record_id, claim_id, "blocked")
         log(text(f"安装建议因安全校验被阻止 #{record_id}: {exc}", f"Suggestion #{record_id} was blocked by safety validation: {exc}"))
         return False
-    except Exception as exc:
-        update_install_suggestion_record(record_id, {"status": "launch_failed"})
-        log(text(f"安装建议启动失败 #{record_id}: {exc}", f"Suggestion #{record_id} failed to launch: {exc}"))
+
+    log(text(f"准备启动安装建议 #{record_id}: {final_fields['preview']}", f"Preparing to launch suggestion #{record_id}: {final_fields['preview']}"))
+    launching = prepare_install_launch(record_id, claim_id, final_fields)
+    if launching is None:
         return False
 
-    update_install_suggestion_record(record_id, {"status": "launched"})
-    log(text(f"安装建议 #{record_id} 已启动进程；这不代表安装成功。", f"Suggestion #{record_id} process launched; this does not mean installation succeeded."))
-    return True
+    # A crash from here until the result is saved leaves "launching" for manual review.
+    argv = [launching["executable"], *launching["args"]]
+    try:
+        subprocess.Popen(argv, shell=False)
+    except OSError as exc:
+        status = "launch_failed"
+        outcome = text(f"启动失败: {exc}", f"Process creation failed: {exc}")
+    except Exception as exc:
+        status = "launch_unknown"
+        outcome = text(f"启动结果未知: {exc}", f"Launch outcome unknown: {exc}")
+    else:
+        status = "launched"
+        outcome = text("已创建进程，安装结果尚未确认。", "Process created. Installation outcome is unconfirmed.")
+
+    if finish_install_claim(record_id, claim_id, status) is None:
+        raise JsonStoreError(f"Could not record {status} for suggestion #{record_id}. Check the queue.")
+    log(f"#{record_id}: {outcome}")
+    return status == "launched"

@@ -174,11 +174,16 @@ PathPilot 将分类结果视为建议，而不是信任判断：
 | 状态 | 含义 |
 |---|---|
 | `pending` | 等待用户明确操作 |
+| `claimed` | 一个调用方已领取该记录，尚未进入进程创建阶段 |
+| `launching` | 即将创建进程或正在记录结果。此时若中断，进程可能已经启动 |
+| `launch_unknown` | 调用方无法确定进程是否已启动 |
 | `skipped` | 用户已跳过 |
 | `blocked` | 被安全检查拒绝 |
 | `launch_failed` | 进程未能启动 |
 | `launched` | 只表示进程已经启动，不表示 installed、completed 或 success |
 | `legacy_unsafe` | 旧式 command-only 记录，始终不可执行 |
+
+只有 `pending` 记录可以领取。领取后若发生中断，记录保留在队列中，PathPilot 不会自动重试启动。可运行 `pathpilot installs detail <id>` 查看已记录的状态。
 
 有关私下报告漏洞的方式和完整安全边界，请参阅 [SECURITY.md](SECURITY.md)。
 

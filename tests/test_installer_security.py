@@ -401,3 +401,29 @@ def test_gui_keeps_legacy_rows_out_of_pending_counts(gui_window) -> None:
     assert page.table.item(0, 5).text() == "legacy_unsafe"
     assert page.summary_label.text() == "待处理安装建议：0"
     assert gui_window.status_label.text().endswith("待处理建议：0")
+
+
+def test_stale_gui_and_cli_skip_cannot_overwrite_claim(
+    gui_window, tmp_path: Path, runtime_paths: dict[str, str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+    from app.cli import app
+    from app.installers.queue import claim_install_suggestion
+
+    record = add_install_suggestion(_make_suggestion(tmp_path, runtime_paths))
+    page = gui_window.install_page
+    page.refresh_btn.click()
+    assert page.skip_btn.isEnabled()
+    claimed = claim_install_suggestion(record["id"])
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _, title, msg: warnings.append(title))
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: pytest.fail("unexpected success dialog"))
+
+    page.skip_btn.click()
+    assert warnings == ["无法跳过"]
+    assert page.table.item(0, 5).text() == "claimed"
+    assert not page.skip_btn.isEnabled()
+    assert not page.run_recommended_btn.isEnabled()
+    assert gui_window.status_label.text().endswith("待处理建议：0")
+    assert CliRunner().invoke(app, ["installs", "skip", str(record["id"])]).exit_code == 1
+    assert load_pending_installs() == [claimed]
