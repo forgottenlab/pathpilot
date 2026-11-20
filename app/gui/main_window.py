@@ -5,7 +5,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QPushButton
 )
 
-from app.installers.queue import get_pending_items
 from app.gui.install_page import InstallPage
 from app.gui.settings_page import SettingsPage
 from app.gui.ui_helpers import open_directory_in_explorer
@@ -51,6 +50,7 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.install_page = InstallPage()
+        self.install_page.queue_refreshed.connect(self._update_status_label)
         self.settings_page = SettingsPage()
 
         self.tabs.addTab(self.install_page, "待安装建议")
@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.tabs)
 
         self.setCentralWidget(central)
-        self.refresh_status()
+        self._update_status_label()
 
         self.setStyleSheet("""
             QMainWindow, QWidget {
@@ -99,10 +99,13 @@ class MainWindow(QMainWindow):
     def refresh_status(self) -> None:
         self.settings = load_settings()
         self.runtime_paths = self.settings["runtime_paths"]
-        pending_count = len(get_pending_items())
+        self.install_page.refresh_table()
 
+    def _update_status_label(self) -> None:
+        pending_count = self.install_page.pending_count
+        queue_status = "队列不可用" if pending_count is None else str(pending_count)
         self.status_label.setText(
             f"根目录：{self.runtime_paths['root_dir']}    |    "
             f"Incoming：{self.runtime_paths['incoming_root']}    |    "
-            f"待处理建议：{pending_count}"
+            f"待处理建议：{queue_status}"
         )
