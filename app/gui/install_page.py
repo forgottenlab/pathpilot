@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QTableWidget, QTableWidgetItem,
@@ -25,9 +25,12 @@ from app.gui.ui_helpers import (
 
 
 class InstallPage(QWidget):
+    queue_refreshed = Signal()
+
     def __init__(self) -> None:
         super().__init__()
         self.current_record: dict | None = None
+        self.pending_count: int | None = None
         self._target_dirty = False
         self._build_ui()
         self._setup_timer()
@@ -184,11 +187,12 @@ class InstallPage(QWidget):
                 if item.get("status") in {"pending", "legacy_unsafe"}
             ]
         except JsonStoreError as exc:
+            self.pending_count = None
             self.summary_label.setText("安装建议队列损坏或被锁定")
+            self.queue_refreshed.emit()
             if not silent:
                 QMessageBox.critical(self, "安装建议队列错误", str(exc))
             return
-        self.summary_label.setText(f"待处理安装建议：{len(items)}")
         preserve_dirty = bool(silent and self._target_dirty and self.current_record)
         preserved_id = int(self.current_record["id"]) if preserve_dirty else None
         preserved_target = self.target_edit.text() if preserve_dirty else ""
@@ -237,6 +241,10 @@ class InstallPage(QWidget):
             record = items[selected_row]
             keep_edit = preserved_id == int(record["id"])
             self.show_record(record, preserve_target=preserved_target if keep_edit else None)
+
+        self.pending_count = sum(item.get("status") == "pending" for item in items)
+        self.summary_label.setText(f"待处理安装建议：{self.pending_count}")
+        self.queue_refreshed.emit()
 
     def clear_detail(self) -> None:
         self.name_label.setText("名称：-")
@@ -396,8 +404,8 @@ class InstallPage(QWidget):
             return
         if ok:
             self._target_dirty = False
-            QMessageBox.information(self, "已启动", "安装器进程已启动；这不代表安装成功。")
             self.refresh_table()
+            QMessageBox.information(self, "已启动", "安装器进程已启动；这不代表安装成功。")
         else:
             QMessageBox.warning(self, "失败", "安装器启动失败或被安全策略阻止。")
 
@@ -410,8 +418,8 @@ class InstallPage(QWidget):
         except JsonStoreError as exc:
             QMessageBox.critical(self, "安装建议队列错误", str(exc))
             return
-        QMessageBox.information(self, "完成", "已跳过该安装建议。")
         self.refresh_table()
+        QMessageBox.information(self, "完成", "已跳过该安装建议。")
 
     def open_installer_location(self) -> None:
         if not self.current_record:

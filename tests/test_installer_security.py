@@ -280,25 +280,124 @@ def test_force_cannot_bypass_install_target_policy(
     assert result.exit_code != 0
 
 
-def test_gui_command_preview_is_read_only_and_refresh_preserves_dirty_target(
-    tmp_path: Path,
+@pytest.fixture
+def gui_window(
     runtime_paths: dict[str, str],
-) -> None:
+):
     pytest.importorskip("PySide6.QtWidgets", reason="GUI extra is not installed")
-    from PySide6.QtWidgets import QApplication
-    from app.gui.install_page import InstallPage
+    from app.core.json_store import atomic_write_json
+    from app.core.paths import get_settings_path
+    from app.gui.start_gui import create_main_window
 
-    add_install_suggestion(_make_suggestion(tmp_path, runtime_paths))
-    application = QApplication.instance() or QApplication([])
-    page = InstallPage()
+    atomic_write_json(get_settings_path(), {
+        "watch_directories": [runtime_paths["user_downloads"]],
+        "base_paths": {"root_dir": runtime_paths["root_dir"]},
+    })
+    application, window = create_main_window()
+    window.install_page.timer.stop()
     try:
-        assert page.command_edit.isReadOnly()
-        edited = str(Path(runtime_paths["apps_root"]) / "General" / "Edited Target")
-        page.target_edit.setText(edited)
-        page.on_target_edited(edited)
-        page.refresh_table_silent()
-        assert page.target_edit.text() == edited
+        yield window
     finally:
-        page.timer.stop()
-        page.close()
+        window.close()
+        window.deleteLater()
         application.processEvents()
+
+
+def test_gui_skipping_suggestion_refreshes_both_counts(
+    gui_window, tmp_path: Path, runtime_paths: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    page = gui_window.install_page
+    add_install_suggestion(_make_suggestion(tmp_path, runtime_paths))
+    gui_window.refresh_status_btn.click()
+    assert gui_window.status_label.text().endswith("待处理建议：1")
+    # Prime the page independently as well, so the skip is exercised on the old GUI.
+    page.refresh_btn.click()
+    statuses_at_confirmation = []
+    monkeypatch.setattr(
+        QMessageBox, "information",
+        lambda *_: statuses_at_confirmation.append(gui_window.status_label.text()),
+    )
+
+    page.skip_btn.click()
+
+    assert load_pending_installs()[0]["status"] == "skipped"
+    assert page.table.rowCount() == 0
+    assert page.summary_label.text() == "待处理安装建议：0"
+    assert gui_window.status_label.text().endswith("待处理建议：0")
+    assert statuses_at_confirmation == [gui_window.status_label.text()]
+
+
+def test_gui_timer_refreshes_both_counts_and_preserves_dirty_target(
+    gui_window, tmp_path: Path, runtime_paths: dict[str, str],
+) -> None:
+    page = gui_window.install_page
+    first = add_install_suggestion(_make_suggestion(tmp_path, runtime_paths))
+    page.refresh_btn.click()
+    assert page.command_edit.isReadOnly()
+    edited = str(Path(runtime_paths["apps_root"]) / "General" / "Edited Target")
+    page.target_edit.setText(edited)
+    page.on_target_edited(edited)
+
+    add_install_suggestion(_make_suggestion(
+        tmp_path, runtime_paths, installer_name="Watcher Fixture.exe",
+    ))
+    page.timer.timeout.emit()
+
+    assert page.table.rowCount() == 2
+    assert page.summary_label.text() == "待处理安装建议：2"
+    assert gui_window.status_label.text().endswith("待处理建议：2")
+    assert page.current_record["id"] == first["id"]
+    assert page.target_edit.text() == edited
+    assert "Edited Target" in page.command_edit.text()
+
+
+def test_gui_manual_refresh_and_queue_error(
+    gui_window, tmp_path: Path, runtime_paths: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from PySide6.QtWidgets import QMessageBox
+    from app.core.json_store import reset_json
+    from app.core.paths import get_pending_installs_path
+
+    page = gui_window.install_page
+    add_install_suggestion(_make_suggestion(tmp_path, runtime_paths))
+    gui_window.refresh_status_btn.click()
+    assert gui_window.status_label.text().endswith("待处理建议：1")
+    assert page.summary_label.text() == "待处理安装建议：1"
+    assert page.table.rowCount() == 1
+
+    errors = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda _, title, _message: errors.append(title))
+    queue_path = get_pending_installs_path()
+    queue_path.write_text("{", encoding="utf-8")
+    page.timer.timeout.emit()
+    assert page.summary_label.text() == "安装建议队列损坏或被锁定"
+    assert gui_window.status_label.text().endswith("待处理建议：队列不可用")
+    assert errors == []
+
+    gui_window.refresh_status_btn.click()
+    assert errors == ["安装建议队列错误"]
+    assert gui_window.status_label.text().endswith("待处理建议：队列不可用")
+
+    reset_json(queue_path, [])
+    page.refresh_btn.click()
+    assert page.table.rowCount() == 0
+    assert page.summary_label.text() == "待处理安装建议：0"
+    assert gui_window.status_label.text().endswith("待处理建议：0")
+
+
+def test_gui_keeps_legacy_rows_out_of_pending_counts(gui_window) -> None:
+    from app.core.json_store import reset_json
+    from app.core.paths import get_pending_installs_path
+
+    reset_json(get_pending_installs_path(), [{"id": 1, "command": "legacy preview"}])
+    gui_window.install_page.refresh_btn.click()
+
+    page = gui_window.install_page
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 5).text() == "legacy_unsafe"
+    assert page.summary_label.text() == "待处理安装建议：0"
+    assert gui_window.status_label.text().endswith("待处理建议：0")
