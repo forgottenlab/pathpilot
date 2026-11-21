@@ -72,7 +72,16 @@ python -m pipx install ".[gui]"
 
 ## 🚀 首次运行
 
-建议先查看状态并了解命令入口：
+指定受管根目录和一个已存在的来源目录，预览目录布局。
+
+```powershell
+pathpilot setup plan --root 'D:\PathPilot' --source 'C:\Users\Alice\Downloads'
+pathpilot setup plan --root 'D:\PathPilot' --source 'C:\Users\Alice\Downloads' --json
+```
+
+预览读取配置快照和目录元数据，显式路径优先于已保存的根目录和来源。预览期间不会创建文件或目录，损坏的配置也会原样保留。拟创建和复用的目录都需在应用时复核。JSON 输出含版本 1、`ready` 或 `blocked` 状态、目录动作和带代码的阻断原因。发生阻断时退出码为 1。
+
+可继续查看当前配置和命令入口。
 
 ```powershell
 pathpilot status
@@ -101,6 +110,7 @@ pathpilot watch
 | `pathpilot` | 显示命令指引 |
 | `pathpilot guide` | 显示详细命令指引 |
 | `pathpilot commands` | 显示同一份受维护的命令指引 |
+| `pathpilot setup plan --root <path> --source <path>` | 预览受管目录布局，可加 `--json` |
 | `pathpilot doctor` | 执行只读诊断 |
 | `pathpilot test` | 执行隔离行为测试 |
 | `pathpilot status` | 显示当前配置和队列状态 |

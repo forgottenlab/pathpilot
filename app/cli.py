@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 from rich import box
 from rich.table import Table
+from rich.text import Text
 
 from app import __version__
 from app.core.console import (
@@ -49,6 +50,7 @@ from app.core.json_store import (
     read_json,
 )
 from app.core.paths import DEFAULT_SETTINGS, get_settings_path
+from app.core.planning import plan_setup
 from app.core.settings import build_runtime_paths, load_rules, load_settings
 from app.diagnostics import run_doctor_report, run_self_test
 from app.files.watcher import start_watching
@@ -71,10 +73,12 @@ app = typer.Typer(
 config_app = typer.Typer(help="配置管理 / Config management")
 sources_app = typer.Typer(help="监听来源目录管理 / Source directory management")
 installs_app = typer.Typer(help="安装建议管理 / Install suggestion management")
+setup_app = typer.Typer(help="初始化预览 / Setup preview")
 
 app.add_typer(config_app, name="config")
 app.add_typer(sources_app, name="sources")
 app.add_typer(installs_app, name="installs")
+app.add_typer(setup_app, name="setup")
 
 GLOBAL_LANG_OVERRIDE: str | None = None
 
@@ -303,6 +307,39 @@ def ui() -> None:
             raise typer.Exit(code=1) from None
         raise
     start_gui()
+
+
+@setup_app.command("plan", help="只读预览受管目录 / Preview the managed layout without writing.")
+def setup_plan(
+    root: str = typer.Option(..., "--root", help="Proposed managed root directory."),
+    source: str = typer.Option(..., "--source", help="Existing external source directory."),
+    json_output: bool = typer.Option(False, "--json", help="Print a versioned JSON result."),
+) -> None:
+    plan = plan_setup(root, source)
+    if json_output:
+        typer.echo(json.dumps(plan.to_dict(), indent=2))
+    else:
+        lang = apply_language()
+        table = Table(title=title_text("初始化预览", "Setup preview", lang))
+        table.caption = Text(text(f"来源目录 {plan.source}", f"Source directory {plan.source}", lang))
+        table.add_column(cell_text("路径", "Path", lang))
+        table.add_column(cell_text("动作", "Action", lang))
+        table.add_column(cell_text("应用前检查", "Apply checks", lang))
+        labels = {
+            "create": cell_text("将创建", "Create", lang),
+            "reuse": cell_text("复用", "Reuse", lang),
+            "blocked": cell_text("阻断", "Blocked", lang),
+        }
+        for item in plan.directories:
+            check = cell_text("应用时验证", "Verify at apply time", lang) if item.verify_at_apply else ""
+            table.add_row(Text(item.path), labels[item.action], check)
+        if plan.directories:
+            console.print(table)
+        for blocker in plan.blockers:
+            console.print(Text(f"[{blocker.code}] {blocker.path}\n{blocker.reason}", style="red"))
+
+    if plan.blockers:
+        raise typer.Exit(code=1)
 
 
 @config_app.command("show")

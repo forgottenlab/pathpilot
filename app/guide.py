@@ -45,6 +45,7 @@ def show_command_guide(lang: str = "zh") -> None:
         ("21", "pathpilot version / -v / --version", cell_text("查看版本号", "Show the version", lang)),
         ("22", "pathpilot --lang en guide", cell_text("临时切换英文输出", "Use English output", lang)),
         ("23", "pathpilot --lang bi guide", cell_text("临时切换双语输出", "Use bilingual output", lang)),
+        ("24", "pathpilot setup plan --root <path> --source <path> [--json]", cell_text("只读预览初始化目录", "Preview the managed directory layout without writing", lang)),
     ]
 
     for row in rows:
