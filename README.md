@@ -174,11 +174,16 @@ PathPilot treats classification as a suggestion, not a trust decision:
 | Status | Meaning |
 |---|---|
 | `pending` | Awaiting explicit user action |
+| `claimed` | One caller has reserved the record. Process creation has yet to begin. |
+| `launching` | The caller is about to create the process or is recording the result. After an interruption, the process may already have started. |
+| `launch_unknown` | The caller could not determine whether the process started. |
 | `skipped` | Skipped by the user |
 | `blocked` | Rejected by a safety check |
 | `launch_failed` | The process could not be started |
 | `launched` | The process started only; this does not mean installed, completed, or successful |
 | `legacy_unsafe` | Legacy command-only record; never executable |
+
+Only a pending record can be claimed. An interrupted claim remains in the queue. PathPilot does not retry the launch automatically. Inspect the recorded state with `pathpilot installs detail <id>`.
 
 See [SECURITY.md](SECURITY.md) for private vulnerability reporting and the complete current boundary.
 

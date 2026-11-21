@@ -56,7 +56,7 @@ from app.guide import show_command_guide
 from app.installers.queue import (
     get_pending_items,
     load_pending_installs,
-    update_install_suggestion_status,
+    skip_install_suggestion,
 )
 from app.installers.runner import run_install_record
 from app.installers.strategy import rebuild_execution_fields
@@ -431,6 +431,9 @@ def render_installs_table(items: list[dict]) -> None:
 
         status_style = {
             "pending": "yellow",
+            "claimed": "yellow",
+            "launching": "yellow",
+            "launch_unknown": "red",
             "launched": "green",
             "launch_failed": "red",
             "blocked": "red",
@@ -578,18 +581,24 @@ def installs_run(
             f"The process for suggestion #{id} was launched; this does not mean installation succeeded.",
         ))
     else:
-        error(text(f"安装建议 #{id} 启动失败或被安全策略阻止。", f"Suggestion #{id} failed to launch or was blocked by safety policy."))
+        error(text(
+            f"此次请求未确认启动。可用 pathpilot installs detail {id} 查看当前状态。",
+            f"Launch was not confirmed for this request. Check the current state with pathpilot installs detail {id}.",
+        ))
         raise typer.Exit(code=1)
 
 
 @installs_app.command("skip")
 def installs_skip(id: int) -> None:
     try:
-        updated = update_install_suggestion_status(int(id), "skipped")
+        updated = skip_install_suggestion(id)
     except JsonStoreError as exc:
         fail_json_store(exc)
     if not updated:
-        error(text(f"未找到安装建议 #{id}", f"Install suggestion #{id} was not found."))
+        error(text(
+            f"安装建议 #{id} 不存在或其当前状态不允许跳过。",
+            f"Suggestion #{id} is missing or its current state does not allow skipping.",
+        ))
         raise typer.Exit(code=1)
 
     ok(text(f"安装建议 #{id} 已标记为 skipped。", f"Install suggestion #{id} was marked skipped."))

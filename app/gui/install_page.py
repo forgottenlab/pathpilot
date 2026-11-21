@@ -12,10 +12,11 @@ from PySide6.QtWidgets import (
 
 from app.core.path_policy import PathPolicyError, validate_install_target
 from app.core.json_store import JsonStoreError
+from app.core.i18n import status_text
 from app.core.settings import load_settings
 from app.installers.queue import (
     load_pending_installs,
-    update_install_suggestion_status,
+    skip_install_suggestion,
 )
 from app.installers.runner import run_install_record
 from app.installers.strategy import rebuild_execution_fields
@@ -72,7 +73,7 @@ class InstallPage(QWidget):
         self.refresh_btn = QPushButton("刷新")
         self.refresh_btn.clicked.connect(self.refresh_table)
 
-        left.addWidget(QLabel("待处理安装建议"))
+        left.addWidget(QLabel("安装建议"))
         left.addWidget(self.table)
         left.addWidget(self.refresh_btn)
 
@@ -184,7 +185,7 @@ class InstallPage(QWidget):
         try:
             items = [
                 item for item in load_pending_installs()
-                if item.get("status") in {"pending", "legacy_unsafe"}
+                if item.get("status") in {"pending", "legacy_unsafe", "claimed", "launching", "launch_unknown"}
             ]
         except JsonStoreError as exc:
             self.pending_count = None
@@ -217,6 +218,8 @@ class InstallPage(QWidget):
                 table_item = QTableWidgetItem(value)
                 if col == 0:
                     table_item.setData(Qt.UserRole, item)
+                elif col == 5:
+                    table_item.setToolTip(status_text(value, "zh"))
 
                 if item.get("mode", "suggest") == "suggest":
                     table_item.setForeground(QColor("#8ab4f8"))
@@ -232,7 +235,8 @@ class InstallPage(QWidget):
             elif not silent:
                 selected_row = 0
                 self.table.selectRow(0)
-        else:
+        if selected_row is None:
+            self.table.clearSelection()
             self.current_record = None
             self.clear_detail()
         self.table.blockSignals(False)
@@ -255,6 +259,7 @@ class InstallPage(QWidget):
         self.target_edit.setText("")
         self.command_edit.setText("")
         self.run_recommended_btn.setEnabled(False)
+        self.skip_btn.setEnabled(False)
         self._target_dirty = False
 
     def on_selection_changed(self) -> None:
@@ -295,7 +300,8 @@ class InstallPage(QWidget):
             f"安装包：{record.get('installer_path', record.get('installer', '-'))}"
         )
         is_legacy = record.get("status") == "legacy_unsafe" or "executable" not in record
-        self.run_recommended_btn.setEnabled(not is_legacy)
+        self.run_recommended_btn.setEnabled(record.get("status") == "pending" and not is_legacy)
+        self.skip_btn.setEnabled(record.get("status") in {"pending", "legacy_unsafe"})
         if preserve_target is None:
             self.target_edit.setText(record.get("target_dir", record.get("target", "")))
             self._target_dirty = False
@@ -341,14 +347,20 @@ class InstallPage(QWidget):
         self.update_preview()
 
     def run_current_record(self) -> None:
-        if not self.current_record:
+        record = self.current_record
+        if not record:
             return
 
-        if self.current_record.get("status") == "legacy_unsafe" or "executable" not in self.current_record:
+        if record.get("status") == "legacy_unsafe" or "executable" not in record:
             QMessageBox.warning(self, "已阻止", "旧版 command-only 记录不允许执行，请重新生成建议。")
             return
 
-        if self.current_record.get("mode") == "suggest":
+        if record.get("status") != "pending":
+            return
+
+        # A timer refresh can replace the selection while the modal dialog is open.
+        chosen_target = self.target_edit.text().strip()
+        if record.get("mode") == "suggest":
             answer = QMessageBox.question(
                 self,
                 "确认启动",
@@ -361,21 +373,6 @@ class InstallPage(QWidget):
                 return
 
         try:
-            items = load_pending_installs()
-        except JsonStoreError as exc:
-            QMessageBox.critical(self, "安装建议队列错误", str(exc))
-            return
-        target_id = int(self.current_record["id"])
-        record = next((x for x in items if int(x["id"]) == target_id), None)
-        if not record:
-            QMessageBox.warning(self, "错误", "未找到该安装建议。")
-            return
-
-        if record.get("status") != "pending" or "executable" not in record:
-            QMessageBox.warning(self, "已阻止", "建议状态或结构已变化，请刷新后重试。")
-            return
-
-        try:
             settings = load_settings()
             runtime_paths = settings["runtime_paths"]
             apps_root = runtime_paths["apps_root"]
@@ -384,7 +381,7 @@ class InstallPage(QWidget):
                 / "01-Software"
                 / "_IncomingInstallers"
             )
-            target = validate_install_target(self.target_edit.text().strip(), apps_root)
+            target = validate_install_target(chosen_target, apps_root)
         except PathPolicyError as exc:
             QMessageBox.warning(self, "路径不安全", exc.localized("zh"))
             return
@@ -407,19 +404,23 @@ class InstallPage(QWidget):
             self.refresh_table()
             QMessageBox.information(self, "已启动", "安装器进程已启动；这不代表安装成功。")
         else:
-            QMessageBox.warning(self, "失败", "安装器启动失败或被安全策略阻止。")
+            self.refresh_table_silent()
+            QMessageBox.warning(self, "未确认启动", f"请用 pathpilot installs detail {record['id']} 查看当前状态。")
 
     def skip_current_record(self) -> None:
         if not self.current_record:
             return
 
         try:
-            update_install_suggestion_status(int(self.current_record["id"]), "skipped")
+            skipped = skip_install_suggestion(int(self.current_record["id"]))
         except JsonStoreError as exc:
             QMessageBox.critical(self, "安装建议队列错误", str(exc))
             return
         self.refresh_table()
-        QMessageBox.information(self, "完成", "已跳过该安装建议。")
+        if skipped is None:
+            QMessageBox.warning(self, "无法跳过", "建议已移除或其当前状态不允许跳过。")
+        else:
+            QMessageBox.information(self, "完成", "已跳过该安装建议。")
 
     def open_installer_location(self) -> None:
         if not self.current_record:
