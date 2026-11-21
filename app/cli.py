@@ -311,8 +311,8 @@ def ui() -> None:
 
 @setup_app.command("plan", help="只读预览受管目录 / Preview the managed layout without writing.")
 def setup_plan(
-    root: str = typer.Option(..., "--root", help="Proposed managed root directory."),
-    source: str = typer.Option(..., "--source", help="Existing external source directory."),
+    root: str | None = typer.Option(None, "--root", help="Override the saved or recommended managed root."),
+    source: str | None = typer.Option(None, "--source", help="Override the saved source or Windows Downloads."),
     json_output: bool = typer.Option(False, "--json", help="Print a versioned JSON result."),
 ) -> None:
     plan = plan_setup(root, source)
@@ -321,7 +321,12 @@ def setup_plan(
     else:
         lang = apply_language()
         table = Table(title=title_text("初始化预览", "Setup preview", lang))
-        table.caption = Text(text(f"来源目录 {plan.source}", f"Source directory {plan.source}", lang))
+        for label, path, reason in (
+            (text("受管根目录", "Managed root", lang), plan.root, plan.root_reason),
+            (text("来源目录", "Source directory", lang), plan.source, plan.source_reason),
+        ):
+            if reason:
+                console.print(Text(f"{label} {path}\n  {reason}"))
         table.add_column(cell_text("路径", "Path", lang))
         table.add_column(cell_text("动作", "Action", lang))
         table.add_column(cell_text("应用前检查", "Apply checks", lang))

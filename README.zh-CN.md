@@ -72,14 +72,17 @@ python -m pipx install ".[gui]"
 
 ## 🚀 首次运行
 
-指定受管根目录和一个已存在的来源目录，预览目录布局。
+自动发现受管根目录和来源，也可分别指定路径。
 
 ```powershell
-pathpilot setup plan --root 'D:\PathPilot' --source 'C:\Users\Alice\Downloads'
+pathpilot setup plan
+pathpilot setup plan --json
 pathpilot setup plan --root 'D:\PathPilot' --source 'C:\Users\Alice\Downloads' --json
 ```
 
-预览读取配置快照和目录元数据，显式路径优先于已保存的根目录和来源。预览期间不会创建文件或目录，损坏的配置也会原样保留。拟创建和复用的目录都需在应用时复核。JSON 输出含版本 1、`ready` 或 `blocked` 状态、目录动作和带代码的阻断原因。发生阻断时退出码为 1。
+路径优先级依次为显式参数、已保存配置和自动发现。未保存根目录时，PathPilot 按可用空间从大到小尝试可访问的非系统固定卷，最后尝试用户配置文件目录下的 `PathPilot`。默认来源是 Windows 当前的 Downloads Known Folder，包括已重定向的路径。查询失败或配置了多个外部来源时，可用 `--source` 指定一个来源。
+
+预览读取配置快照并检查选定路径。预览期间不会创建文件或目录，损坏的配置也会原样保留。拟创建和复用的目录都需在应用时复核。JSON 版本 1 包含目录动作、阻断原因及选定路径的来源和依据。发生阻断时退出码为 1。
 
 可继续查看当前配置和命令入口。
 
@@ -110,7 +113,7 @@ pathpilot watch
 | `pathpilot` | 显示命令指引 |
 | `pathpilot guide` | 显示详细命令指引 |
 | `pathpilot commands` | 显示同一份受维护的命令指引 |
-| `pathpilot setup plan --root <path> --source <path>` | 预览受管目录布局，可加 `--json` |
+| `pathpilot setup plan` | 预览受管目录布局，可加 `--root`、`--source` 和 `--json` |
 | `pathpilot doctor` | 执行只读诊断 |
 | `pathpilot test` | 执行隔离行为测试 |
 | `pathpilot status` | 显示当前配置和队列状态 |

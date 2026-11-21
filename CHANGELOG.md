@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `pathpilot setup plan` can discover Windows Downloads and recommend a managed
+  root, with optional overrides and selection reasons in JSON.
 - `pathpilot setup plan --root <path> --source <path>` previews directory actions
   and blockers without writing state, with an optional versioned JSON result.
 
