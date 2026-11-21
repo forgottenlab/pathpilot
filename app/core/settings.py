@@ -134,8 +134,8 @@ def resolve_template(value: str, variables: dict[str, Any]) -> str:
     return value.format(**variables)
 
 
-def ensure_runtime_directories(runtime_paths: dict[str, Any]) -> None:
-    required_dirs = [
+def runtime_directories(runtime_paths: dict[str, Any]) -> list[str]:
+    return [
         runtime_paths["root_dir"],
         runtime_paths["archive_root"],
         runtime_paths["apps_root"],
@@ -163,7 +163,9 @@ def ensure_runtime_directories(runtime_paths: dict[str, Any]) -> None:
         f"{runtime_paths['data_root']}/Logs",
     ]
 
-    for dir_str in required_dirs:
+
+def ensure_runtime_directories(runtime_paths: dict[str, Any]) -> None:
+    for dir_str in runtime_directories(runtime_paths):
         Path(dir_str).mkdir(parents=True, exist_ok=True)
 
 

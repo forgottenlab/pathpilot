@@ -72,7 +72,16 @@ Uninstall removes only the pipx application by default. It removes PathPilot use
 
 ## 🚀 First run
 
-Start by checking status and learning the command surface:
+Preview a proposed managed root and an existing source directory:
+
+```powershell
+pathpilot setup plan --root 'D:\PathPilot' --source 'C:\Users\Alice\Downloads'
+pathpilot setup plan --root 'D:\PathPilot' --source 'C:\Users\Alice\Downloads' --json
+```
+
+The preview reads a settings snapshot and checks directory metadata. The explicit paths take precedence over the saved root and sources. It creates no files or directories and leaves any damaged settings file in place. Create and reuse actions still require verification at apply time. JSON output has schema version 1, `ready` or `blocked` status, directory actions and coded blockers. A blocked plan exits with code 1.
+
+Check the active configuration and learn the command surface:
 
 ```powershell
 pathpilot status
@@ -101,6 +110,7 @@ pathpilot watch
 | `pathpilot` | Show the command guide |
 | `pathpilot guide` | Show the detailed command guide |
 | `pathpilot commands` | Show the same maintained command guide |
+| `pathpilot setup plan --root <path> --source <path>` | Preview the managed layout, with optional `--json` |
 | `pathpilot doctor` | Run read-only diagnostics |
 | `pathpilot test` | Run an isolated behavior test |
 | `pathpilot status` | Show current configuration and queue status |

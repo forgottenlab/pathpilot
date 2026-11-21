@@ -84,6 +84,7 @@ def test_guide_lists_every_real_command_without_duplicate_force_row() -> None:
         "pathpilot doctor",
         "pathpilot test",
         "pathpilot status",
+        "pathpilot setup plan",
         "pathpilot watch",
         "pathpilot ui",
         "pathpilot config show",

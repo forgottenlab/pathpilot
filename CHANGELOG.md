@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `pathpilot setup plan --root <path> --source <path>` previews directory actions
+  and blockers without writing state, with an optional versioned JSON result.
+
 ### Fixed
 
 - GUI CI now records the actual exit code of each Python command, and GUI
