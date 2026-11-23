@@ -72,14 +72,17 @@ Uninstall removes only the pipx application by default. It removes PathPilot use
 
 ## 🚀 First run
 
-Preview a proposed managed root and an existing source directory:
+Discover a managed root and source, or override either path:
 
 ```powershell
-pathpilot setup plan --root 'D:\PathPilot' --source 'C:\Users\Alice\Downloads'
+pathpilot setup plan
+pathpilot setup plan --json
 pathpilot setup plan --root 'D:\PathPilot' --source 'C:\Users\Alice\Downloads' --json
 ```
 
-The preview reads a settings snapshot and checks directory metadata. The explicit paths take precedence over the saved root and sources. It creates no files or directories and leaves any damaged settings file in place. Create and reuse actions still require verification at apply time. JSON output has schema version 1, `ready` or `blocked` status, directory actions and coded blockers. A blocked plan exits with code 1.
+Explicit paths take precedence over saved settings and automatic discovery. If there is no saved root, PathPilot tries readable non-system fixed drives in descending free-space order, then the user profile's `PathPilot` directory. The default source is the actual Windows Downloads Known Folder, including redirected locations. If discovery fails or several external sources are configured, pass `--source` to preview one.
+
+The preview reads a settings snapshot and checks the selected paths. It creates no files or directories and leaves damaged settings in place. Create and reuse actions still require verification at apply time. JSON schema version 1 includes directory actions, blockers, and the origin and reason for each selected path. A blocked plan exits with code 1.
 
 Check the active configuration and learn the command surface:
 
@@ -110,7 +113,7 @@ pathpilot watch
 | `pathpilot` | Show the command guide |
 | `pathpilot guide` | Show the detailed command guide |
 | `pathpilot commands` | Show the same maintained command guide |
-| `pathpilot setup plan --root <path> --source <path>` | Preview the managed layout, with optional `--json` |
+| `pathpilot setup plan` | Preview the managed layout, with optional `--root`, `--source`, and `--json` |
 | `pathpilot doctor` | Run read-only diagnostics |
 | `pathpilot test` | Run an isolated behavior test |
 | `pathpilot status` | Show current configuration and queue status |
